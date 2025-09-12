@@ -8,192 +8,188 @@ source(here("helper.R"))
 # --- Server Definition ---
 server <- function(input, output, session) {
   
-  # Reactive values to store app state
-  app_state <- reactiveValues(
-    files_to_process = character(0),
-    current_index = 1,
-    classification_data = NULL,
-    resume_mode = FALSE,
-    current_file = NULL
+  # reactiveValues object for storing data
+  data_storage <- reactiveValues(
+    features = NULL,
+    current_chunk = 1,
+    files_to_classify = NULL,
+    full_wave_object = NULL
   )
   
-  # Observer to handle "Process and Slice File" button click
-  observeEvent(input$process_btn, {
-    req(input$file_upload)
-    
-    # Reset app state
-    app_state$files_to_process <- character(0)
-    app_state$current_index <- 1
-    app_state$classification_data <- NULL
-    app_state$resume_mode <- FALSE
-    app_state$current_file <- NULL
-    
-    showNotification("Processing and slicing file...", duration = NULL, type = "info", id = "processing_note")
-    
-    # Process the uploaded file and pass filtering options to the helper function
-    withProgress(message = "Slicing audio...", value = 0.5, {
-      temp_path <- input$file_upload$datapath
-      app_state$classification_data <- process_wav(
-        wav_path = temp_path,
-        stationary_filter = input$stationary_filter,
-        nonstationary_filter = input$nonstationary_filter,
-        low_pass_hz = input$low_pass_hz,
-        high_pass_hz = input$high_pass_hz,
-        window_size = input$window_size,
-        window_overlap = input$window_overlap
-      )
-    })
-    
-    removeNotification(id = "processing_note")
-    
-    # Get the list of new files to process from the temp directory
-    app_state$files_to_process <- list.files("tmp", pattern = ".wav", full.names = TRUE)
-    app_state$current_file <- app_state$files_to_process[app_state$current_index]
-    
-    # Enable buttons
-    shinyjs::enable("squawk_btn")
-    shinyjs::enable("other_btn")
-    shinyjs::enable("unknown_btn")
-    shinyjs::enable("noise_btn")
-    
-    showNotification("Processing complete. Ready to classify.", type = "success")
-  })
-  
-  # Observer to handle "Resume" button click
-  observeEvent(input$resume_btn, {
-    temp_dir <- "tmp"
-    if (!dir.exists(temp_dir)) {
-      showNotification("No 'tmp' folder found to resume from.", type = "error")
-      return()
-    }
-    
-    # Reset state
-    app_state$files_to_process <- character(0)
-    app_state$current_index <- 1
-    app_state$classification_data <- NULL
-    app_state$resume_mode <- TRUE
-    app_state$current_file <- NULL
-    
-    # Load the features CSV
-    features_path <- file.path(temp_dir, "features.csv")
-    if (!file.exists(features_path)) {
-      showNotification("No 'features.csv' found in the 'tmp' folder.", type = "error")
-      return()
-    }
-    app_state$classification_data <- fread(features_path)
-    
-    # Find the files to process (unclassified ones)
-    all_temp_files <- list.files(temp_dir, pattern = ".wav", full.names = TRUE)
-    classified_file_names <- app_state$classification_data$classification != "Unclassified"
-    
-    if (all(classified_file_names)) {
-      showNotification("All files in 'tmp' folder have already been classified.", type = "info")
-      return()
-    }
-    
-    # Identify which files correspond to unclassified rows
-    unclassified_indices <- which(app_state$classification_data$classification == "Unclassified")
-    
-    app_state$files_to_process <- all_temp_files[unclassified_indices]
-    app_state$current_index <- 1
-    app_state$current_file <- app_state$files_to_process[app_state$current_index]
-    
-    # Enable buttons
-    shinyjs::enable("squawk_btn")
-    shinyjs::enable("other_btn")
-    shinyjs::enable("unknown_btn")
-    shinyjs::enable("noise_btn")
-    
-    showNotification("Resumed from temporary files.", type = "info")
-  })
-  
-  # A helper function to advance to the next audio snippet
-  advance_to_next <- function() {
-    app_state$current_index <- app_state$current_index + 1
-    if (app_state$current_index <= length(app_state$files_to_process)) {
-      app_state$current_file <- app_state$files_to_process[app_state$current_index]
-    } else {
-      showNotification("All files have been classified!", type = "success", duration = NULL)
-      app_state$current_file <- NULL
-      shinyjs::disable("squawk_btn")
-      shinyjs::disable("other_btn")
-      shinyjs::disable("unknown_btn")
-      shinyjs::disable("noise_btn")
-    }
+  # Create a temporary directory for storing sliced files and data
+  temp_dir <- file.path("tmp")
+  if (!dir.exists(temp_dir)) {
+    dir.create(temp_dir)
   }
   
-  # Observers for classification buttons
-  observeEvent(input$squawk_btn, {
-    req(app_state$current_file)
-    original_index <- which(list.files("tmp", pattern=".wav", full.names=TRUE) == app_state$current_file)
-    classify_and_move("Squawk", app_state$files_to_process, original_index, app_state$classification_data, file.path("tmp", "features.csv"))
-    advance_to_next()
+  # --- UI Update Logic ---
+  
+  # Hide the main UI until a file is uploaded or a session is resumed
+  observeEvent(input$upload_file, {
+    shinyjs::hide("main_ui")
   })
   
-  observeEvent(input$other_btn, {
-    req(app_state$current_file)
-    original_index <- which(list.files("tmp", pattern=".wav", full.names=TRUE) == app_state$current_file)
-    classify_and_move("Other Vocalisation", app_state$files_to_process, original_index, app_state$classification_data, file.path("tmp", "features.csv"))
-    advance_to_next()
-  })
-  
-  observeEvent(input$unknown_btn, {
-    req(app_state$current_file)
-    original_index <- which(list.files("tmp", pattern=".wav", full.names=TRUE) == app_state$current_file)
-    classify_and_move("Unknown", app_state$files_to_process, original_index, app_state$classification_data, file.path("tmp", "features.csv"))
-    advance_to_next()
-  })
-  
-  observeEvent(input$noise_btn, {
-    req(app_state$current_file)
-    original_index <- which(list.files("tmp", pattern=".wav", full.names=TRUE) == app_state$current_file)
-    classify_and_move("Noise", app_state$files_to_process, original_index, app_state$classification_data, file.path("tmp", "features.csv"))
-    advance_to_next()
-  })
-  
-  # --- UI Rendering and Plotting ---
-  
-  # Render the current file name display
-  output$current_file_display <- renderText({
-    if (!is.null(app_state$current_file)) {
-      paste("Classifying: ", basename(app_state$current_file))
-    } else {
-      "Waiting for file..."
+  observeEvent(data_storage$features, {
+    if (!is.null(data_storage$features)) {
+      shinyjs::show("main_ui")
     }
   })
   
-  # Render the audio player
+  # --- File Processing and Chunking ---
+  
+  # Main logic for processing the uploaded file
+  observeEvent(input$process_btn, {
+    req(input$upload_file)
+    
+    # Show processing message
+    showModal(modalDialog(
+      title = "Processing File",
+      "Please wait while the audio is being processed and sliced.",
+      footer = NULL
+    ))
+    
+    # Process the full wave file and get features
+    processing_results <- process_wav(
+      wav_path = input$upload_file$datapath,
+      stationary_filter = input$stationary_filter,
+      nonstationary_filter = input$nonstationary_filter,
+      low_pass_hz = input$low_pass_hz,
+      high_pass_hz = input$high_pass_hz,
+      window_size = input$window_size,
+      window_overlap = input$window_overlap
+    )
+    
+    # Store the full wave object
+    data_storage$full_wave_object <- processing_results$proc_wav
+    
+    # Slice the file into chunks based on the auto-classification
+    chunking_results <- group_and_slice_chunks(
+      features_df = processing_results$features_df,
+      full_wave = data_storage$full_wave_object,
+      positive_class = "Squawk", # Hard-coded positive class
+      buffer_time = 1.0,         # Hard-coded buffer time
+      temp_dir = temp_dir
+    )
+    
+    # Update reactive values
+    data_storage$features <- chunking_results$updated_features_df
+    data_storage$files_to_classify <- chunking_results$file_paths
+    data_storage$current_chunk <- 1
+    
+    # Hide the modal and proceed
+    removeModal()
+  })
+  
+  # Resume previous session
+  observeEvent(input$resume_btn, {
+    if (file.exists(file.path(temp_dir, "features.csv"))) {
+      # Load saved features data
+      data_storage$features <- fread(file.path(temp_dir, "features.csv"))
+      
+      # Load the full wave object
+      load(file.path(temp_dir, "full_wave.RData"))
+      data_storage$full_wave_object <- full_wave_obj
+      
+      # Get the list of remaining chunks to classify
+      files <- list.files(temp_dir, pattern = "\\.wav$", full.names = TRUE)
+      data_storage$files_to_classify <- files
+      data_storage$current_chunk <- 1
+    }
+  })
+  
+  # --- Navigation and Classification ---
+  
+  # Event handler for next/previous and classification buttons
+  # The input from hotkeys (e.g., input$hotkey_1) is also observed here
+  observeEvent(list(input$btn_squawk, input$btn_other, input$btn_unknown, input$btn_noise, input$hotkey_1, input$hotkey_2, input$hotkey_3, input$hotkey_4), {
+    
+    # Classification logic
+    classification <- ""
+    if (isTRUE(input$btn_squawk > 0) || isTRUE(input$hotkey_1 > 0)) {
+      classification <- "Squawk"
+    } else if (isTRUE(input$btn_other > 0) || isTRUE(input$hotkey_2 > 0)) {
+      classification <- "Other Vocalisation"
+    } else if (isTRUE(input$btn_unknown > 0) || isTRUE(input$hotkey_3 > 0)) {
+      classification <- "Unknown"
+    } else if (isTRUE(input$btn_noise > 0) || isTRUE(input$hotkey_4 > 0)) {
+      classification <- "Noise"
+    }
+    
+    # Check if a classification button was actually clicked
+    if (classification != "") {
+      # Get the path of the current file
+      current_path <- data_storage$files_to_classify[data_storage$current_chunk]
+      
+      # Classify and move the file, and update the master CSV
+      classify_and_move(
+        classification = classification,
+        chunk_path = current_path,
+        features_df = data_storage$features
+      )
+      
+      # Advance to the next chunk
+      data_storage$current_chunk <- data_storage$current_chunk + 1
+    }
+  })
+  
+  # Event handler for next/previous buttons
+  observeEvent(input$btn_next, {
+    data_storage$current_chunk <- data_storage$current_chunk + 1
+  })
+  
+  observeEvent(input$btn_prev, {
+    data_storage$current_chunk <- max(1, data_storage$current_chunk - 1)
+  })
+  
+  # --- Output Rendering ---
+  
+  # Render the current audio file and waveform/spectrogram
   output$audio_player <- renderUI({
-    req(app_state$current_file)
-    tags$audio(src = sub("www/", "", app_state$current_file), type = "audio/wav", controls = NA, autoplay = "autoplay", style = "display: block; width: 100%;")
-  })
-  
-  # Render the status text
-  output$status_text <- renderText({
-    if (is.null(app_state$classification_data)) {
-      "Ready to start."
-    } else {
-      paste0("Processing file ", app_state$current_index, " of ", length(app_state$files_to_process))
-    }
-  })
-  
-  # Reactive expression to get the current audio snippet
-  current_audio <- reactive({
-    req(app_state$current_file)
-    readWave(app_state$current_file)
+    req(data_storage$files_to_classify)
+    
+    chunk_path <- data_storage$files_to_classify[data_storage$current_chunk]
+    req(file.exists(chunk_path))
+    
+    tags$audio(src = chunk_path, type = "audio/wav", autoplay = TRUE, controls = TRUE)
   })
   
   # Render the waveform plot
   output$waveform_plot <- renderPlot({
-    req(current_audio())
-    audio_data <- current_audio()
-    plot(audio_data, type = "l", main = "Waveform", xlab = "Time (s)", ylab = "Amplitude")
+    req(data_storage$files_to_classify)
+    chunk_path <- data_storage$files_to_classify[data_storage$current_chunk]
+    
+    # Check if a file actually exists at the specified path
+    req(file.exists(chunk_path))
+    
+    chunk_wave <- readWave(chunk_path)
+    # The `seewave::...` is not required here since it's already a package dependency
+    wave(chunk_wave, title = "Waveform")
   })
   
   # Render the spectrogram plot
   output$spectrogram_plot <- renderPlot({
-    req(current_audio())
-    audio_data <- current_audio()
-    seewave::spectro(audio_data, osc = TRUE, main = "Spectrogram")
+    req(data_storage$files_to_classify)
+    chunk_path <- data_storage$files_to_classify[data_storage$current_chunk]
+    
+    # Check if a file actually exists at the specified path
+    req(file.exists(chunk_path))
+    
+    chunk_wave <- readWave(chunk_path)
+    spectro(chunk_wave, osc = FALSE, grid = FALSE, title = "Spectrogram")
+  })
+  
+  # Display the current file information and progress
+  output$file_info <- renderText({
+    req(data_storage$files_to_classify)
+    
+    total_files <- length(data_storage$files_to_classify)
+    current_file_name <- basename(data_storage$files_to_classify[data_storage$current_chunk])
+    
+    paste0("File ", data_storage$current_chunk, " of ", total_files, ": ", current_file_name)
+  })
+  
+  # Stop the app when the session ends
+  session$onSessionEnded(function() {
+    stopApp()
   })
 }
