@@ -1,9 +1,13 @@
+# server.R: Contains the core logic of the Shiny application.
+
 if (!require("pacman")) {
   install.packages("pacman")
   library(pacman)
-} 
-p_load(here, shiny, dplyr, data.table, seewave, tuneR)
+}
+p_load(here, shiny, dplyr, data.table, seewave, tuneR, shinyjs)
 source(here("helper.R"))
+
+options(shiny.maxRequestSize=30*1024^2)
 
 # --- Server Definition ---
 server <- function(input, output, session) {
@@ -17,10 +21,13 @@ server <- function(input, output, session) {
   )
   
   # Create a temporary directory for storing sliced files and data
-  temp_dir <- file.path("tmp")
+  temp_dir <- here("Output", "tmp")
   if (!dir.exists(temp_dir)) {
-    dir.create(temp_dir)
+    dir.create(temp_dir, recursive = TRUE)
   }
+  
+  # Map temporary directory to a web-accessible URL
+  addResourcePath("temp_audio", temp_dir)
   
   # --- UI Update Logic ---
   
@@ -82,13 +89,13 @@ server <- function(input, output, session) {
   
   # Resume previous session
   observeEvent(input$resume_btn, {
-    if (file.exists(file.path(temp_dir, "features.csv"))) {
+    if (file.exists(file.path(temp_dir, "features.csv")) && file.exists(file.path(temp_dir, "full_wave.RData"))) {
       # Load saved features data
       data_storage$features <- fread(file.path(temp_dir, "features.csv"))
       
       # Load the full wave object
       load(file.path(temp_dir, "full_wave.RData"))
-      data_storage$full_wave_object <- full_wave_obj
+      data_storage$full_wave_object <- full_wave
       
       # Get the list of remaining chunks to classify
       files <- list.files(temp_dir, pattern = "\\.wav$", full.names = TRUE)
@@ -97,41 +104,58 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- Navigation and Classification ---
-  
-  # Event handler for next/previous and classification buttons
-  # The input from hotkeys (e.g., input$hotkey_1) is also observed here
-  observeEvent(list(input$btn_squawk, input$btn_other, input$btn_unknown, input$btn_noise, input$hotkey_1, input$hotkey_2, input$hotkey_3, input$hotkey_4), {
+# --- Navigation and Classification ---
     
-    # Classification logic
-    classification <- ""
-    if (isTRUE(input$btn_squawk > 0) || isTRUE(input$hotkey_1 > 0)) {
-      classification <- "Squawk"
-    } else if (isTRUE(input$btn_other > 0) || isTRUE(input$hotkey_2 > 0)) {
-      classification <- "Other Vocalisation"
-    } else if (isTRUE(input$btn_unknown > 0) || isTRUE(input$hotkey_3 > 0)) {
-      classification <- "Unknown"
-    } else if (isTRUE(input$btn_noise > 0) || isTRUE(input$hotkey_4 > 0)) {
-      classification <- "Noise"
-    }
+    # Event handlers for classification buttons and hotkeys
+    observeEvent(list(input$btn_squawk, input$hotkey_1), {
+      # Check if a click or hotkey event was actually triggered
+      if (isTRUE(input$btn_squawk > 0) || isTRUE(input$hotkey_1 > 0)) {
+        current_path <- data_storage$files_to_classify[data_storage$current_chunk]
+        classify_and_move(
+          classification = "Squawk",
+          chunk_path = current_path,
+          features_df = data_storage$features
+        )
+        data_storage$current_chunk <- data_storage$current_chunk + 1
+      }
+    })
     
-    # Check if a classification button was actually clicked
-    if (classification != "") {
-      # Get the path of the current file
-      current_path <- data_storage$files_to_classify[data_storage$current_chunk]
-      
-      # Classify and move the file, and update the master CSV
-      classify_and_move(
-        classification = classification,
-        chunk_path = current_path,
-        features_df = data_storage$features
-      )
-      
-      # Advance to the next chunk
-      data_storage$current_chunk <- data_storage$current_chunk + 1
-    }
-  })
-  
+    observeEvent(list(input$btn_other, input$hotkey_2), {
+      if (isTRUE(input$btn_other > 0) || isTRUE(input$hotkey_2 > 0)) {
+        current_path <- data_storage$files_to_classify[data_storage$current_chunk]
+        classify_and_move(
+          classification = "Other Vocalisation",
+          chunk_path = current_path,
+          features_df = data_storage$features
+        )
+        data_storage$current_chunk <- data_storage$current_chunk + 1
+      }
+    })
+    
+    observeEvent(list(input$btn_unknown, input$hotkey_3), {
+      if (isTRUE(input$btn_unknown > 0) || isTRUE(input$hotkey_3 > 0)) {
+        current_path <- data_storage$files_to_classify[data_storage$current_chunk]
+        classify_and_move(
+          classification = "Unknown",
+          chunk_path = current_path,
+          features_df = data_storage$features
+        )
+        data_storage$current_chunk <- data_storage$current_chunk + 1
+      }
+    })
+    
+    observeEvent(list(input$btn_noise, input$hotkey_4), {
+      if (isTRUE(input$btn_noise > 0) || isTRUE(input$hotkey_4 > 0)) {
+        current_path <- data_storage$files_to_classify[data_storage$current_chunk]
+        classify_and_move(
+          classification = "Noise",
+          chunk_path = current_path,
+          features_df = data_storage$features
+        )
+        data_storage$current_chunk <- data_storage$current_chunk + 1
+      }
+    })
+    
   # Event handler for next/previous buttons
   observeEvent(input$btn_next, {
     data_storage$current_chunk <- data_storage$current_chunk + 1
@@ -148,9 +172,11 @@ server <- function(input, output, session) {
     req(data_storage$files_to_classify)
     
     chunk_path <- data_storage$files_to_classify[data_storage$current_chunk]
-    req(file.exists(chunk_path))
+    req(file.exists(here(chunk_path)))
     
-    tags$audio(src = chunk_path, type = "audio/wav", autoplay = TRUE, controls = TRUE)
+
+    print(chunk_path[[1]])
+    tags$audio(src = file.path("temp_audio", basename(chunk_path[[1]])), type = "audio/wav", autoplay = TRUE, controls = TRUE)
   })
   
   # Render the waveform plot
@@ -159,11 +185,11 @@ server <- function(input, output, session) {
     chunk_path <- data_storage$files_to_classify[data_storage$current_chunk]
     
     # Check if a file actually exists at the specified path
-    req(file.exists(chunk_path))
+    req(file.exists(here(chunk_path)))
     
-    chunk_wave <- readWave(chunk_path)
-    # The `seewave::...` is not required here since it's already a package dependency
-    wave(chunk_wave, title = "Waveform")
+    chunk_wave <- readWave(here(chunk_path))
+   
+    seewave::oscillo(chunk_wave, title = "Waveform")
   })
   
   # Render the spectrogram plot
@@ -172,10 +198,11 @@ server <- function(input, output, session) {
     chunk_path <- data_storage$files_to_classify[data_storage$current_chunk]
     
     # Check if a file actually exists at the specified path
-    req(file.exists(chunk_path))
+    req(file.exists(here(chunk_path)))
     
-    chunk_wave <- readWave(chunk_path)
-    spectro(chunk_wave, osc = FALSE, grid = FALSE, title = "Spectrogram")
+    chunk_wave <- readWave(here(chunk_path))
+    req(seewave::duration(chunk_wave) > 0.001)
+    spectro(chunk_wave, osc = FALSE, grid = FALSE, main = "Spectrogram")
   })
   
   # Display the current file information and progress
@@ -183,7 +210,7 @@ server <- function(input, output, session) {
     req(data_storage$files_to_classify)
     
     total_files <- length(data_storage$files_to_classify)
-    current_file_name <- basename(data_storage$files_to_classify[data_storage$current_chunk])
+    current_file_name <- basename(here(data_storage$files_to_classify[data_storage$current_chunk]))
     
     paste0("File ", data_storage$current_chunk, " of ", total_files, ": ", current_file_name)
   })

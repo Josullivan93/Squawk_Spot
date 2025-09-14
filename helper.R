@@ -2,7 +2,7 @@ if (!require("pacman")) {
   install.packages("pacman")
   library(pacman)
 } 
-p_load(here, dplyr, data.table, seewave, tuneR, parallel, future, future.apply, reticulate)
+p_load(here, tidyverse, data.table, seewave, tuneR, parallel, future, future.apply, reticulate)
 # Set up and use a dedicated Python virtual environment for consistency
 if (!reticulate::virtualenv_exists("r-reticulate")) {
   message("Creating Python virtual environment 'r-reticulate'...")
@@ -291,8 +291,8 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class, buffe
   
   # Clear existing files in tmp folder unless resuming
   file.remove(list.files(temp_dir, full.names = TRUE, recursive = TRUE))
-  full_wave_obj <- full_wave
-  save(full_wave_obj, file = file.path(temp_dir, "full_wave.RData"))
+  
+  save(full_wave, file = file.path(temp_dir, "full_wave.RData"))
   
   # Identify chunks of the positive class
   positive_chunks <- features_df %>%
@@ -357,10 +357,13 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class, buffe
     # Note: centerpoint is already handled by start_time and end_time
     # The buffer just adds time before the start and after the end.
     buffered_start <- max(0, chunk$start_time - buffer_time)
-    buffered_end <- min(full_wave@duration, chunk$end_time + buffer_time)
-    
+    buffered_end <- min(round(length(full_wave@left)/full_wave@samp.rate,2), chunk$end_time + buffer_time)
     # Slice the wave object
     sliced_wave <- cutw(full_wave, from = buffered_start, to = buffered_end, plot = FALSE, output = "Wave")
+    # Normalize the data before writing
+    sliced_wave <- normalize(sliced_wave, unit = "16")
+    # Alternative slice as cutw causing errors
+    #sliced_wave <- Wave(full_wave@left[buffered_start:buffered_end], samp.rate = full_wave@samp.rate, bit = full_wave@bit)
     
     # Save the sliced wave file
     file_name <- paste0("chunk_", chunk$chunk_id, "_", format(buffered_start, nsmall = 2), ".wav")
@@ -497,25 +500,25 @@ process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_p
 #' @param features_df The updated features data frame from reactive state.
 classify_and_move <- function(classification, chunk_path, features_df) {
   # Create the destination folder if it doesn't exist
-  dest_dir <- file.path(".", classification)
+  dest_dir <- here("Output", classification)
   if (!dir.exists(dest_dir)) {
     dir.create(dest_dir)
   }
   
   # Move the chunk file from the temp directory to the classified directory
-  file.rename(chunk_path, file.path(dest_dir, basename(chunk_path)))
+  file.rename(here(chunk_path), file.path(dest_dir, basename(chunk_path[[1]])))
   
   # Update the classification for all the windows in the original features file
   chunk_id <- features_df %>% dplyr::filter(chunk_filepath == chunk_path) %>% pull(chunk_id) %>% .[!is.na(.)] %>% unique()
   
   if (length(chunk_id) > 0) {
-    all_features <- fread(file.path("tmp", "features.csv"))
+    all_features <- fread(here("Output","tmp", "features.csv"))
     
     # Update the user_class for all rows with the matching chunk ID
     all_features[which(all_features$chunk_id == chunk_id), user_class := classification]
     
     # Save the updated master CSV
-    data.table::fwrite(all_features, file.path("tmp", "features.csv"))
+    data.table::fwrite(all_features, here("Output","tmp", "features.csv"))
     
     # Append the rows to the classification-specific CSV
     dest_csv_path <- file.path(dest_dir, paste0(classification, ".csv"))
@@ -524,7 +527,7 @@ classify_and_move <- function(classification, chunk_path, features_df) {
     # Now using the user_class column for the filepath in the CSV
     rows_to_add <- all_features %>%
       dplyr::filter(chunk_id == chunk_id) %>%
-      mutate(filepath = file.path(dest_dir, basename(chunk_path)))
+      mutate(filepath = file.path(dest_dir, basename(chunk_path[[1]])))
     
     # Append to the CSV
     data.table::fwrite(rows_to_add, dest_csv_path, append = TRUE, col.names = !file.exists(dest_csv_path))
