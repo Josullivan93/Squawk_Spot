@@ -2,7 +2,7 @@ if (!require("pacman")) {
   install.packages("pacman")
   library(pacman)
 } 
-p_load(here, tidyverse, data.table, seewave, tuneR, parallel, future, future.apply, reticulate)
+p_load(here, tidyverse, data.table, signal, seewave, tuneR, parallel, future, future.apply, reticulate)
 # Set up and use a dedicated Python virtual environment for consistency
 if (!reticulate::virtualenv_exists("r-reticulate")) {
   message("Creating Python virtual environment 'r-reticulate'...")
@@ -13,6 +13,62 @@ reticulate::py_config()
 
 
 # Helper Functions
+
+#' Calculate Spectrogram Manually to Bypass External Package Limits.
+#'
+#' This function performs a Short-Time Fourier Transform (STFT) from scratch,
+#' avoiding the internal limitations discovered in seewave::spectro and signal::specgram.
+#'
+#' @param wave A Wave object from the 'tuneR' package.
+#' @param wl The desired window length (FFT size). A power of 2 is recommended.
+#' @return A list with three elements: $time, $freq, and $amp.
+calculate_spectrogram_manual <- function(wave, wl = 512) {
+  # 1. Extract parameters from the wave object
+  audio_signal <- wave@left
+  samp_rate <- wave@samp.rate
+  
+  # 2. Define STFT parameters
+  overlap <- wl / 2
+  hop_length <- wl - overlap
+  
+  # 3. Create overlapping segments (windows) of the audio signal
+  num_samples <- length(audio_signal)
+  start_indices <- seq(from = 1, to = num_samples - wl + 1, by = hop_length)
+  # Create a matrix where each column is a segment
+  segments <- sapply(start_indices, function(i) {
+    audio_signal[i:(i + wl - 1)]
+  })
+  
+  # 4. Apply a window function to each segment to reduce spectral leakage
+  window_func <- hanning(wl)
+  segments_windowed <- apply(segments, 2, function(col) col * window_func)
+  
+  # 5. Apply the Fast Fourier Transform (FFT) to each windowed segment
+  # mvfft() is an optimized function for applying fft to all columns of a matrix
+  stft_matrix_complex <- mvfft(segments_windowed)
+  
+  # 6. Process the output
+  # The FFT is symmetric, so we only need the first half of the results
+  stft_matrix_complex <- stft_matrix_complex[1:(floor(wl / 2) + 1), ]
+  
+  # Calculate amplitude (absolute value) and convert to decibels (dB)
+  amp_matrix <- abs(stft_matrix_complex)
+  amp_db <- 20 * log10(amp_matrix + 1e-9) # Add epsilon to avoid log(0)
+  
+  # 7. Create the corresponding time and frequency vectors for the axes
+  num_time_bins <- ncol(amp_db)
+  time_vector <- (seq(0, num_time_bins - 1) * hop_length) / samp_rate
+  
+  num_freq_bins <- nrow(amp_db)
+  freq_vector <- (seq(0, num_freq_bins - 1) * samp_rate / wl) / 1000 # in kHz
+ 
+  # 8. Return the final data in the expected list format
+  return(list(
+    time = time_vector,
+    freq = freq_vector,
+    amp = amp_db
+  ))
+}
 
 #' Calculates Power Spectral Density (PSD).
 #'
@@ -360,6 +416,8 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class, buffe
     buffered_end <- min(round(length(full_wave@left)/full_wave@samp.rate,2), chunk$end_time + buffer_time)
     # Slice the wave object
     sliced_wave <- cutw(full_wave, from = buffered_start, to = buffered_end, plot = FALSE, output = "Wave")
+    
+    #sliced_wave <- cutw(full_wave, from = buffered_start, to = buffered_end, plot = FALSE, output = "Wave")
     # Normalize the data before writing
     sliced_wave <- normalize(sliced_wave, unit = "16")
     # Alternative slice as cutw causing errors
