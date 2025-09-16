@@ -14,23 +14,14 @@ reticulate::py_config()
 
 # Helper Functions
 
-#' Calculates Power Spectral Density (PSD).
-#'
-#' This function takes audio data from a single window and calculates its
-#' Power Spectral Density using a Hanning window.
-#'
-#' @param win_dat Numeric vector of audio data for a single window.
-#' @param samp_rate Numeric, the sample rate of the audio.
-#' @param fft_len Numeric, the length of the FFT to use.
-#' @return A data frame with PSD data or NULL if computation fails.
+# ---------------------------
+# PSD and flux helpers (unchanged)
+# ---------------------------
 psd_calc <- function(win_dat,
                      samp_rate,
                      fft_len = 2^ceiling(log2(length(win_dat)))
-){
-  # Frequency Domain - Calculate Power Spectral Density
-  # Using tryCatch for spectral analysis as it can fail on weird inputs
+) {
   spec_out <- tryCatch({
-    # Use norm=FALSE as some seewave functions expect non-normalized power
     seewave::spec(win_dat, f = samp_rate, wl = fft_len, wn = "hanning",
                   PSD = TRUE, norm = FALSE, dB = NULL, plot = FALSE)
   }, error = function(e) {
@@ -40,107 +31,116 @@ psd_calc <- function(win_dat,
   return(spec_out)
 }
 
-#' Placeholder for the flux calculation function.
-#'
-#' @param psd_list A list containing the PSD objects for the previous and current window.
-#' @return A numeric value representing the spectral flux.
 flux_calc <- function(psd_pair) {
-  
   spec_curr <- psd_pair$curr
   spec_prev <- psd_pair$prev
-  
-  # Basic checks
   if (is.null(spec_curr) || is.null(spec_prev) ||
       !is.matrix(spec_curr) || !is.matrix(spec_prev) ||
       nrow(spec_curr) != nrow(spec_prev)) {
-    # Return NA if spectra are invalid or don't match dimensions
     return(NA_real_)
   }
-  # Calculate Euclidean distance between power vectors (spec[,2])
   flux <- sqrt(sum((spec_curr[, 2] - spec_prev[, 2])^2, na.rm = TRUE))
   return(flux)
-  
 }
 
-#' Processes a single audio window and calculates its features.
-#'
-#' This function is called by `wav_min_feat` to process individual windows of audio
-#' data and calculate various features like RMS and spectral properties.
-#'
-#' @param index Numeric, the index of the current window.
-#' @param step_size Numeric, the step size between windows in samples.
-#' @param wav_data Numeric vector of the full audio data.
-#' @param win_len Numeric, the window length in samples.
-#' @param samp_rate Numeric, the sample rate of the audio.
-#' @param fft_len Numeric, the length of the FFT.
-#' @return A list of features for the window, or NULL if an error occurs.
-process_single_window <- function(index, step_size, wav_data, win_len, samp_rate, fft_len) {
+
+# ---------------------------
+# process_wav (unchanged flow, calls calc_features)
+# ---------------------------
+process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_pass_hz, high_pass_hz, window_size, window_overlap) {
+  message("Processing Audio...")
+  wav_obj <- readWave(wav_path)
+  proc_wav <- wav_obj
+  sample_rate <- proc_wav@samp.rate
+  is_stereo <- proc_wav@stereo
+  signal_left <- as.numeric(proc_wav@left)
+  if (is_stereo) signal_right <- as.numeric(proc_wav@right)
   
-  # 1. Calculate the start sample for this index
-  start_sample <- ((index - 1) * step_size) + 1
-  end_sample <- start_sample + win_len - 1
-  
-  # Check for edge case where the last window might be out of bounds
-  if (end_sample > length(wav_data)) {
-    return(NULL) # This window can't be processed, return nothing
+  # noise reduction via python (unchanged)
+  if (stationary_filter) {
+    message("Applying Stationary Noise Reduction...")
+    py_left <- r_to_py(signal_left)
+    py_rate <- r_to_py(sample_rate)
+    nr <- import("noisereduce")
+    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = TRUE)
+    signal_left <- as.numeric(py_to_r(new_signal)); rm(new_signal)
+    if (is_stereo) {
+      py_right <- r_to_py(signal_right)
+      new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = TRUE)
+      signal_right <- as.numeric(py_to_r(new_signal)); rm(new_signal)
+    }
+  } else if (nonstationary_filter) {
+    message("Applying Non-Stationary Noise Reduction...")
+    py_left <- r_to_py(signal_left)
+    py_rate <- r_to_py(sample_rate)
+    nr <- import("noisereduce")
+    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = FALSE)
+    signal_left <- as.numeric(py_to_r(new_signal)); rm(new_signal)
+    if (is_stereo) {
+      py_right <- r_to_py(signal_right)
+      new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = FALSE)
+      signal_right <- as.numeric(py_to_r(new_signal)); rm(new_signal)
+    }
   }
   
-  window_audio <- wav_data[start_sample:end_sample]
+  if (is_stereo) {
+    proc_wav <- tuneR::Wave(left = signal_left, right = signal_right, samp.rate = sample_rate, bit = proc_wav@bit)
+  } else {
+    proc_wav <- tuneR::Wave(left = signal_left, samp.rate = sample_rate, bit = proc_wav@bit)
+  }
   
-  # Do same for previous window
+  # frequency filtering (unchanged)
+  if ((!is.na(low_pass_hz) | !is.na(high_pass_hz))) {
+    message("Applying Frequency Filtering...")
+    from_hz <- high_pass_hz
+    to_hz <- low_pass_hz
+    if (!is.na(from_hz) & !is.na(to_hz) && from_hz > to_hz) {
+      temp_hz <- from_hz; from_hz <- to_hz; to_hz <- temp_hz
+    }
+    proc_wav <- ffilter(proc_wav, from = from_hz, to = to_hz)
+  }
+  
+  # Calculate features (calls calc_features below)
+  features_df <- calc_features(proc_wav, window_size, window_overlap)
+  message("Audio Processing and Feature Calculation Complete.")
+  return(list(proc_wav = proc_wav, features_df = features_df))
+}
+
+# ---------------------------
+# process_single_window (unchanged)
+# ---------------------------
+process_single_window <- function(index, step_size, wav_data, win_len, samp_rate, fft_len) {
+  start_sample <- ((index - 1) * step_size) + 1
+  end_sample <- start_sample + win_len - 1
+  if (end_sample > length(wav_data)) return(NULL)
+  window_audio <- wav_data[start_sample:end_sample]
   prev_start_sample <- ((index - 2) * step_size) + 1
   prev_end_sample <- prev_start_sample + win_len - 1
-  
   prev_window_audio <- wav_data[prev_start_sample:prev_end_sample]
   
-  rms_val <- NA
-  spec_centroid_val <- NA
-  spec_entropy_val <- NA
-  spec_skew_val <- NA
-  spec_kurt_val <- NA
-  flux_val <- NA
+  rms_val <- NA; spec_centroid_val <- NA; spec_entropy_val <- NA
+  spec_skew_val <- NA; spec_kurt_val <- NA; flux_val <- NA
   
   tryCatch({
-    
-    # 2. Calculate RMS for the window
     rms_val <- sqrt(mean(window_audio^2, na.rm = TRUE))
-    
-    # 3. Calculate PSD and then the spectral centroid
-    spec_centroid_val <- NA # Default value in case of error
-    psd_obj  <- NULL
-    
     psd_obj <- psd_calc(window_audio, samp_rate = samp_rate, fft_len = fft_len)
-    
     spec_props <- tryCatch({
       seewave::specprop(spec = psd_obj, f = samp_rate, plot = FALSE)
     }, error = function(e) {
-      warning("Could not compute spectral properties: ", e$message)
-      # If specprop fails, we return NULL and handle it later
-      return(NULL)
+      warning("Could not compute spectral properties: ", e$message); return(NULL)
     })
-    
     if (!is.null(spec_props)) {
       spec_centroid_val <- spec_props$cent
       spec_entropy_val <- spec_props$sh
       spec_skew_val <- spec_props$skewness
       spec_kurt_val <- spec_props$kurtosis
     }
-    
-    
-    # 4. Calculate PSD for previous window & Flux between previous and current
     psd_prev <- psd_calc(prev_window_audio, samp_rate = samp_rate, fft_len = fft_len)
-    
-    if (!is.null(psd_obj) && !is.null(psd_prev)) {
-      flux_val <- flux_calc(list(prev = psd_prev, curr = psd_obj))
-    }
-    
+    if (!is.null(psd_obj) && !is.null(psd_prev)) flux_val <- flux_calc(list(prev = psd_prev, curr = psd_obj))
   }, error = function(e) {
     warning(paste("Window index", index, ": Could not compute features:", e$message))
   })
   
-  
-  
-  # 5. Return features for this window as a single, small list
   return(list(
     rms = rms_val,
     centroid = spec_centroid_val,
@@ -154,83 +154,43 @@ process_single_window <- function(index, step_size, wav_data, win_len, samp_rate
   ))
 }
 
-#' Calculates features and timestamps for audio processing.
-#'
-#' This function takes a processed wave object and calculates timestamps
-#' and generates a data frame of features based on a specified window size and overlap.
-#' This function replaces the original `calculate_features` with your custom
-#' feature extraction logic.
-#'
-#' @param processed_wave The wave object after any filtering has been applied.
-#' @param window_size Numeric, the size of each audio window in seconds.
-#' @param window_overlap Numeric, the percentage of overlap between consecutive windows.
-#' @return A data frame containing the generated features and timestamps.
-calc_features <- function(proc_wav, window_size, window_overlap){
-  
+# ---------------------------
+# calc_features (unchanged except ensure user_class present)
+# ---------------------------
+calc_features <- function(proc_wav, window_size, window_overlap) {
   message('Calculating Features...')
-  
-  # Set parallel plan
-  plan(multisession, workers = round(parallel::detectCores()-2))
-  
+  plan(multisession, workers = round(parallel::detectCores() - 2))
   samp_rate <- proc_wav@samp.rate
-  wav_data <- proc_wav@left # Just processes left channel at this time
-  
-  # Timestamp based segmentation
-  #duration <- proc_wav@duration
-  #step_size <- window_size * (1 - window_overlap/100)
-  #timestamps <- seq(from = 0, to = duration - window_size, by = step_size)
-  
-  # Sample number based segmentation
+  wav_data <- proc_wav@left
   win_len <- round(window_size * samp_rate)
-  step_size <- floor(win_len * (1 - window_overlap/100))
+  step_size <- floor(win_len * (1 - window_overlap / 100))
   num_windows <- floor((length(wav_data) - win_len) / step_size) + 1
-  
-  # Standardised FFT length
   standard_fft_len <- 2^ceiling(log2(win_len))
-  
   message(paste("Processing", num_windows, "windows in parallel..."))
   
-  # Calculate features in parallel:
   results_list <- future.apply::future_lapply(
     X = 2:num_windows,
     FUN = process_single_window,
     future.chunk.size = 1000,
-    # Pass necessary arguments to the helper function
     step_size = step_size,
     wav_data = wav_data,
     win_len = win_len,
     samp_rate = samp_rate,
     fft_len = standard_fft_len,
-    # Explicitly list packages needed on the workers
     future.packages = c("seewave")
   )
   
   message("Combining features and finalising...")
-  
-  # Calculate feature (except flux) for first window
   first_window <- wav_data[1:win_len]
-  
-  first_cent <- NA # Default value in case of error
-  first_entropy <- NA
-  first_skew <- NA
-  first_kurt <- NA
-  first_psd  <- NULL
-  
-  first_psd <- psd_calc(first_window , samp_rate = samp_rate, fft_len = standard_fft_len)
-  
+  first_psd <- psd_calc(first_window, samp_rate = samp_rate, fft_len = standard_fft_len)
   first_spec <- tryCatch({
     seewave::specprop(spec = first_psd, f = samp_rate, plot = FALSE)
-  }, error = function(e) {
-    warning("Could not compute spectral properties: ", e$message)
-    # If specprop fails, we return NULL and handle it later
-    return(NULL)
-  })
+  }, error = function(e) { warning("Could not compute spectral properties: ", e$message); return(NULL) })
   
+  first_cent <- NA; first_entropy <- NA; first_skew <- NA; first_kurt <- NA
   if (!is.null(first_spec)) {
-    first_cent <- first_spec$cent
-    first_entropy <- first_spec$sh
-    first_skew <- first_spec$skewness
-    first_kurt <- first_spec$kurtosis
+    first_cent <- first_spec$cent; first_entropy <- first_spec$sh
+    first_skew <- first_spec$skewness; first_kurt <- first_spec$kurtosis
   }
   
   features_1 <- list(
@@ -242,146 +202,269 @@ calc_features <- function(proc_wav, window_size, window_overlap){
     flux = NA,
     window_index = 1,
     start_time = 0,
-    end_time = ( win_len - 1 ) / samp_rate
+    end_time = (win_len - 1) / samp_rate
   )
   
-  # Combine window 1 results with all other window results
-  # Extract features and remove null
   valid_results <- results_list[!sapply(results_list, is.null)]
-  
-  # Prepend features_1_list to the list of other results
-  # Note: features_1_list must be wrapped in list() to become element 1 of all_results_list
   all_results_list <- c(list(features_1), valid_results)
-  
   final_features <- rbindlist(all_results_list, fill = TRUE)
-  
-  # Ensure order if needed (though rbind should preserve it)
   setorder(final_features, window_index)
   
-  # Add the classification column needed by the app
+  # Add classification columns
   final_features$auto_class <- "Unclassified"
+  final_features$user_class <- "Unclassified"
   
-  ###### Add logic for automatic classification ######
-  for( i in 1:nrow(final_features)){
-    
+  for (i in 1:nrow(final_features)) {
     final_features$auto_class[i] <- ifelse(final_features$rms[i] > 28.32544 & final_features$centroid[i] > 1635.022, "Squawk", "Non-Squawk")
-    
   }
   
   return(final_features)
 }
 
-# ---------------------------------------------------------
-# Group features into clips and export temp wavs
-# ---------------------------------------------------------
-
+# ---------------------------
+# group_and_slice_chunks (patched)
+# ---------------------------
 group_and_slice_chunks <- function(features_df, full_wave, positive_class,
                                    buffer_time = 1.0, temp_dir,
                                    target_length = 3.0) {
-  
   # Ensure temp dir exists
   if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
+  
+  # Ensure data.table
+  if (!is.data.table(features_df)) features_df <- as.data.table(copy(features_df))
   
   # Require auto_class column
   if (!"auto_class" %in% names(features_df)) {
     stop("features_df must contain a column named 'auto_class'")
   }
   
-  # Normalize auto_class to character
+  # Normalize auto_class to character & ensure ordering
   features_df[, auto_class := as.character(auto_class)]
+  if ("window_index" %in% names(features_df)) setorder(features_df, window_index)
   
-  # Add logical flag for positive class
-  features_df[, is_positive := auto_class == positive_class]
+  # compute logical vector (avoid NSE scoping issues)
+  is_pos <- features_df$auto_class == positive_class
   
-  # Order by window index
-  setorder(features_df, window_index)
+  # identify run starts and assign run_id (only positive windows get run_id)
+  run_start_vec <- is_pos & !c(FALSE, head(is_pos, -1))    # TRUE when a positive window follows a non-positive
+  run_id_vec <- cumsum(run_start_vec)
+  run_id_vec[!is_pos] <- NA_integer_
+  features_df[, run_id := run_id_vec]
+  features_df[, is_positive := is_pos]
   
-  # Identify runs based strictly on consecutive positives
-  features_df[, run_boundary := (get("is_positive") & !shift(get("is_positive"), fill = FALSE))]
-  features_df[, run_id := cumsum(run_boundary)]
-  features_df[!get("is_positive"), run_id := NA_integer_]
-  
-  # Collect unique run IDs
-  valid_runs <- na.omit(unique(features_df$run_id))
-  
-  clip_paths <- c()
-  run_metadata <- list()
-  
-  # Process each run
-  for (rid in valid_runs) {
-    run_windows <- features_df[run_id == rid]
-    
-    # Run start/end times (based only on actual positive windows)
-    start_time <- min(run_windows$start_time)
-    end_time   <- max(run_windows$end_time)
-    
-    # Extend to target_length if needed
-    if ((end_time - start_time) < target_length) {
-      end_time <- start_time + target_length
-    }
-    
-    # Add buffer outside of run bounds (only affects slice, not run detection)
-    slice_start <- max(0, start_time - buffer_time)
-    slice_end   <- min(end_time + buffer_time, length(full_wave@left) / full_wave@samp.rate)
-    
-    # Slice audio
-    clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
-    out_path <- file.path(temp_dir, paste0("run_", rid, ".wav"))
-    writeWave(clip, out_path)
-    
-    clip_paths <- c(clip_paths, out_path)
-    
-    # Store metadata
-    run_metadata[[as.character(rid)]] <- list(
-      run_id = rid,
-      windows = run_windows$window_index,
-      filepath = out_path
-    )
-    
-    # Update features_df with clip path
-    features_df[run_id == rid, clip_path := out_path]
+  # Make a runs table (one row per run_id)
+  runs_dt <- features_df[!is.na(run_id), .(
+    start_time = min(start_time, na.rm = TRUE),
+    end_time   = max(end_time, na.rm = TRUE),
+    windows    = list(window_index)
+  ), by = run_id]
+  if (nrow(runs_dt) == 0) {
+    # nothing to slice
+    fwrite(features_df, file.path(temp_dir, "features.csv"))
+    save(full_wave, file = file.path(temp_dir, "full_wave.RData"))
+    fwrite(runs_dt, file.path(temp_dir, "runs.csv"))
+    return(list(updated_features_df = features_df,
+                file_paths = character(0),
+                run_metadata = list(),
+                runs_table = runs_dt))
   }
   
-  # Save updated features and full_wave
+  # process runs in order
+  setorder(runs_dt, run_id)
+  clip_paths <- character(nrow(runs_dt))
+  run_metadata <- vector("list", nrow(runs_dt))
+  
+  dur <- length(full_wave@left) / full_wave@samp.rate
+  
+  for (i in seq_len(nrow(runs_dt))) {
+    rid <- runs_dt$run_id[i]
+    st <- runs_dt$start_time[i]
+    ed <- runs_dt$end_time[i]
+    
+    # extend to target_length if shorter; do NOT cut long runs
+    if ((ed - st) < target_length) ed <- st + target_length
+    
+    # buffer applies only to slice; it does NOT affect merging/detection logic
+    slice_start <- max(0, st - buffer_time)
+    slice_end   <- min(ed + buffer_time, dur)
+    
+    # slice and save
+    clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
+    out_name <- paste0("run_", sprintf("%04d", rid),
+                       "_", sprintf("%.2f-%.2f", slice_start, slice_end), ".wav")
+    out_path <- file.path(temp_dir, out_name)
+    writeWave(clip, out_path)
+    clip_paths[i] <- out_path
+    
+    # metadata
+    run_metadata[[i]] <- list(
+      run_id = rid,
+      windows = unlist(runs_dt$windows[i]),
+      filepath = out_path,
+      start_time = st,
+      end_time = ed,
+      slice_start = slice_start,
+      slice_end = slice_end
+    )
+    
+    # annotate features_df windows with filepath for convenience
+    features_df[run_id == rid, filepath := out_path]
+  }
+  
+  # Persist outputs
   fwrite(features_df, file.path(temp_dir, "features.csv"))
+  # make runs table to save (with simpler structure)
+  runs_export <- data.table(
+    run_id = runs_dt$run_id,
+    start_time = runs_dt$start_time,
+    end_time = runs_dt$end_time,
+    filepath = clip_paths
+  )
+  fwrite(runs_export, file.path(temp_dir, "runs.csv"))
   save(full_wave, file = file.path(temp_dir, "full_wave.RData"))
   
   return(list(
     updated_features_df = features_df,
     file_paths = clip_paths,
-    run_metadata = run_metadata
+    run_metadata = run_metadata,
+    runs_table = runs_export
   ))
 }
 
-# ---------------------------------------------------------
-# Classify and move (run_id-level)
-# ---------------------------------------------------------
-classify_and_move <- function(label, run_id, features_df, output_dir) {
-  stopifnot("run_id" %in% names(features_df))
-  stopifnot("filepath" %in% names(features_df))
+# ---------------------------
+# classify_and_move (patched signature)
+# ---------------------------
+# Accept call pattern used in server: classify_and_move(classification = "Squawk", run_id = 1, temp_dir = temp_dir, output_dir = output_dir)
+classify_and_move <- function(label, run_id, features_df = NULL,
+                              temp_dir = NULL, output_dir = NULL) {
+  if (missing(label) || missing(run_id)) stop("label and run_id are required.")
+  if (is.null(temp_dir) && is.null(features_df)) {
+    stop("Either 'features_df' (in-memory) or 'temp_dir' must be provided (features.csv lives in temp_dir).")
+  }
   
-  # Subset rows for this run
-  run_rows <- features_df[run_id == !!run_id]
-  if (nrow(run_rows) == 0) stop(paste("No rows found for run_id =", run_id))
+  # default temp_dir detection
+  if (is.null(temp_dir)) {
+    tentative <- file.path(here("Output", "tmp"))
+    if (file.exists(file.path(tentative, "features.csv"))) temp_dir <- tentative
+  }
   
-  # Assign label to auto_class column
-  features_df[run_id == !!run_id, auto_class := label]
+  # default output_dir = parent of temp_dir or here("Output")
+  if (is.null(output_dir)) {
+    if (!is.null(temp_dir)) {
+      output_dir <- normalizePath(dirname(temp_dir))
+    } else {
+      output_dir <- here("Output")
+    }
+  } else {
+    if (!is.null(temp_dir) && normalizePath(output_dir) == normalizePath(temp_dir)) {
+      output_dir <- normalizePath(dirname(temp_dir))
+      message("classify_and_move: output_dir equals temp_dir → writing classification folders to ", output_dir)
+    }
+  }
   
-  # Determine source file
-  src_file <- unique(run_rows$filepath)
-  if (length(src_file) != 1) stop(paste("Expected one filepath for run_id =", run_id,
-                                        "but found", length(src_file)))
+  # load features if not provided
+  feat_path <- file.path(temp_dir, "features.csv")
+  if (is.null(features_df)) {
+    if (!file.exists(feat_path)) stop("features.csv not found in temp_dir: ", temp_dir)
+    features_df <- fread(feat_path)
+  } else {
+    if (!is.data.table(features_df)) features_df <- as.data.table(copy(features_df))
+    else features_df <- copy(features_df)
+  }
   
-  # Destination directory
-  dest_dir <- file.path(output_dir, label)
-  if (!dir.exists(dest_dir)) dir.create(dest_dir, recursive = TRUE)
+  # read runs table if present
+  runs_path <- file.path(temp_dir, "runs.csv")
+  runs_dt <- NULL
+  if (file.exists(runs_path)) {
+    runs_dt <- fread(runs_path)
+  }
   
-  # Copy clip to destination
-  dest_file <- file.path(dest_dir, basename(src_file))
-  file.copy(src_file, dest_file, overwrite = TRUE)
+  # required columns
+  if (!"run_id" %in% names(features_df)) stop("features_df must contain 'run_id' column.")
+  if (!"filepath" %in% names(features_df) && is.null(runs_dt)) {
+    stop("features_df must contain 'filepath' or temp_dir must have runs.csv")
+  }
   
-  # Persist updated features.csv
-  fwrite(features_df, file.path(output_dir, "features.csv"))
+  # --- Filter rows for the selected run_id only ---
+  run_id_int <- as.integer(run_id)
+  features_df[, run_id := as.integer(run_id)]
+  rows_to_move <- features_df[run_id == run_id_int, ]
+  if (nrow(rows_to_move) == 0) stop("No rows found for run_id = ", run_id_int)
   
-  return(features_df)
+  # resolve clip file path
+  clip_path <- NULL
+  if (!is.null(runs_dt) && "run_id" %in% names(runs_dt)) {
+    runs_dt[, run_id := as.integer(run_id)]
+    candidate <- runs_dt[run_id == run_id_int, filepath]
+    if (length(candidate) >= 1 && file.exists(candidate[1])) clip_path <- candidate[1]
+  }
+  if (is.null(clip_path)) {
+    cand <- unique(rows_to_move$filepath)
+    for (c in cand) {
+      if (file.exists(c)) { clip_path <- c; break }
+      c2 <- file.path(temp_dir, basename(c))
+      if (file.exists(c2)) { clip_path <- c2; break }
+    }
+  }
+  if (is.null(clip_path) || !file.exists(clip_path)) {
+    stop("Could not resolve clip file for run_id=", run_id_int)
+  }
+  
+  # ensure output dirs exist
+  if (!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
+  label_dir <- file.path(output_dir, gsub(" ", "_", label))
+  if (!dir.exists(label_dir)) dir.create(label_dir, recursive = TRUE)
+  
+  # --- destination file with collision safeguard ---
+  base_name <- tools::file_path_sans_ext(basename(clip_path))
+  ext <- tools::file_ext(clip_path)
+  safe_name <- paste0(base_name, "_run", run_id_int, ".", ext)
+  new_clip_path <- file.path(label_dir, safe_name)
+  
+  # move or copy
+  moved <- FALSE
+  try({ moved <- file.rename(clip_path, new_clip_path) }, silent = TRUE)
+  if (!moved) {
+    copied <- file.copy(clip_path, new_clip_path, overwrite = TRUE)
+    if (!copied) stop("Failed to move or copy clip to ", new_clip_path)
+    unlink(clip_path)
+  }
+  
+  # Assign label ONLY to this run’s rows
+  rows_to_move[, user_class := label]
+  rows_to_move[, filepath := new_clip_path]
+  
+  # Append these rows to master_features.csv
+  master_csv <- file.path(output_dir, "master_features.csv")
+  if (file.exists(master_csv)) {
+    master_df <- fread(master_csv)
+    master_df <- rbind(master_df, rows_to_move, fill = TRUE)
+    fwrite(master_df, master_csv)
+  } else {
+    fwrite(rows_to_move, master_csv)
+  }
+  
+  # Append to label-specific CSV
+  label_csv <- file.path(label_dir, paste0(gsub(" ", "_", label), ".csv"))
+  if (file.exists(label_csv)) {
+    lab_df <- fread(label_csv)
+    lab_df <- rbind(lab_df, rows_to_move, fill = TRUE)
+    fwrite(lab_df, label_csv)
+  } else {
+    fwrite(rows_to_move, label_csv)
+  }
+  
+  # Remove only this run from features_df and save back to tmp
+  remaining <- features_df[run_id != run_id_int | is.na(run_id), ]
+  fwrite(remaining, feat_path)
+  
+  # Remove this run from runs.csv
+  if (!is.null(runs_dt)) {
+    runs_dt[, run_id := as.integer(run_id)]
+    remaining_runs <- runs_dt[run_id != run_id_int]
+    fwrite(remaining_runs, runs_path)
+  }
+  
+  message(sprintf("run_id=%s labelled '%s' and clip moved to: %s", run_id_int, label, new_clip_path))
+  invisible(remaining)
 }

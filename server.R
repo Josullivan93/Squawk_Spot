@@ -4,6 +4,7 @@ if (!require("pacman")) {
   install.packages("pacman")
   library(pacman)
 }
+
 p_load(here, shiny, dplyr, data.table, seewave, tuneR, shinyjs, plotly)
 source(here("helper.R"))
 
@@ -76,7 +77,9 @@ server <- function(input, output, session) {
       temp_dir = temp_dir
     )
     
+    # store everything returned
     data_storage$features <- chunking_results$updated_features_df
+    data_storage$runs_table <- chunking_results$runs_table   # <- NEW: one row per run (ordered)
     data_storage$files_to_classify <- chunking_results$file_paths
     data_storage$current_run <- 1
     
@@ -85,79 +88,82 @@ server <- function(input, output, session) {
   
   # Resume previous session
   observeEvent(input$resume_btn, {
-    if (file.exists(file.path(temp_dir, "features.csv")) && file.exists(file.path(temp_dir, "full_wave.RData"))) {
-      data_storage$features <- fread(file.path(temp_dir, "features.csv"))
-      load(file.path(temp_dir, "full_wave.RData"))
-      data_storage$full_wave_object <- full_wave
-      
-      files <- list.files(temp_dir, pattern = "\\.wav$", full.names = TRUE)
-      data_storage$files_to_classify <- files
-      data_storage$current_run <- 1
+    data_storage$features <- fread(file.path(temp_dir, "features.csv"))
+    if (file.exists(file.path(temp_dir, "runs.csv"))) {
+      data_storage$runs_table <- fread(file.path(temp_dir, "runs.csv"))
+      data_storage$files_to_classify <- data_storage$runs_table$filepath
+    } else {
+      data_storage$runs_table <- NULL
+      data_storage$files_to_classify <- list.files(temp_dir, pattern="\\.wav$", full.names=TRUE)
     }
   })
   
   # --- Navigation and Classification ---
   observeEvent(list(input$btn_squawk, input$hotkey_1), {
     if (isTRUE(input$btn_squawk > 0) || isTRUE(input$hotkey_1 > 0)) {
-      current_run <- data_storage$current_run
-      current_run_id <- data_storage$features$run_id[current_run]
+      current_run_idx <- data_storage$current_run
+      current_run_id <- data_storage$runs_table$run_id[current_run_idx]
       
+      # annotate and update in-memory features
       data_storage$features <- classify_and_move(
         label = "Squawk",
         run_id = current_run_id,
-        features_df = data_storage$features,
-        output_dir = temp_dir
+        features_df = data_storage$features,   # optional: in-memory
+        temp_dir = temp_dir,
+        output_dir = here("Output")
       )
-      
-      data_storage$current_run <- current_run + 1
+      data_storage$current_run <- current_run_idx + 1
     }
   })
   
   observeEvent(list(input$btn_other, input$hotkey_2), {
     if (isTRUE(input$btn_other > 0) || isTRUE(input$hotkey_2 > 0)) {
-      current_run <- data_storage$current_run
-      current_run_id <- data_storage$features$run_id[current_run]
+      current_run_idx <- data_storage$current_run
+      current_run_id <- data_storage$runs_table$run_id[current_run_idx]
       
+      # annotate and update in-memory features
       data_storage$features <- classify_and_move(
         label = "Other Vocalisations",
         run_id = current_run_id,
-        features_df = data_storage$features,
-        output_dir = temp_dir
+        features_df = data_storage$features,   # optional: in-memory
+        temp_dir = temp_dir,
+        output_dir = here("Output")
       )
-      
-      data_storage$current_run <- current_run + 1
+      data_storage$current_run <- current_run_idx + 1
     }
   })
   
   observeEvent(list(input$btn_unknown, input$hotkey_3), {
     if (isTRUE(input$btn_unknown > 0) || isTRUE(input$hotkey_3 > 0)) {
-      current_run <- data_storage$current_run
-      current_run_id <- data_storage$features$run_id[current_run]
+      current_run_idx <- data_storage$current_run
+      current_run_id <- data_storage$runs_table$run_id[current_run_idx]
       
+      # annotate and update in-memory features
       data_storage$features <- classify_and_move(
         label = "Unknown",
         run_id = current_run_id,
-        features_df = data_storage$features,
-        output_dir = temp_dir
+        features_df = data_storage$features,   # optional: in-memory
+        temp_dir = temp_dir,
+        output_dir = here("Output")
       )
-      
-      data_storage$current_run <- current_run + 1
+      data_storage$current_run <- current_run_idx + 1
     }
   })
   
   observeEvent(list(input$btn_noise, input$hotkey_4), {
     if (isTRUE(input$btn_noise > 0) || isTRUE(input$hotkey_4 > 0)) {
-      current_run <- data_storage$current_run
-      current_run_id <- data_storage$features$run_id[current_run]
+      current_run_idx <- data_storage$current_run
+      current_run_id <- data_storage$runs_table$run_id[current_run_idx]
       
+      # annotate and update in-memory features
       data_storage$features <- classify_and_move(
         label = "Noise",
         run_id = current_run_id,
-        features_df = data_storage$features,
-        output_dir = temp_dir
+        features_df = data_storage$features,   # optional: in-memory
+        temp_dir = temp_dir,
+        output_dir = here("Output")
       )
-      
-      data_storage$current_run <- current_run + 1
+      data_storage$current_run <- current_run_idx + 1
     }
   })
   
