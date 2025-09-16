@@ -260,7 +260,6 @@ calc_features <- function(proc_wav, window_size, window_overlap){
   
   # Add the classification column needed by the app
   final_features$auto_class <- "Unclassified"
-  final_features$user_class <- "Unclassified"
   
   ###### Add logic for automatic classification ######
   for( i in 1:nrow(final_features)){
@@ -272,266 +271,117 @@ calc_features <- function(proc_wav, window_size, window_overlap){
   return(final_features)
 }
 
-#' Groups consecutive windows of a specific class and slices them into new files.
-#'
-#' This function filters the feature data for a specified "positive class",
-#' identifies consecutive sequences of windows, and slices the original WAV file
-#' to create new, longer audio chunks with a user-defined buffer.
-#'
-#' @param features_df The data frame containing features for all windows.
-#' @param full_wave The original wave object.
-#' @param positive_class The classification to filter for.
-#' @param buffer_time The time in seconds to add as a buffer.
-#' @param temp_dir The temporary directory to save the sliced chunks.
-#' @param resume Logical, if TRUE, it will only slice and return unclassified chunks.
-#' @return A list containing the file paths of the new chunks and the updated features data frame.
-group_and_slice_chunks <- function(features_df, full_wave, positive_class, buffer_time, negative_percentage = 0.05, temp_dir) {
+# ---------------------------------------------------------
+# Group features into clips and export temp wavs
+# ---------------------------------------------------------
+
+group_and_slice_chunks <- function(features_df, full_wave, positive_class,
+                                   buffer_time = 1.0, temp_dir,
+                                   target_length = 3.0) {
   
-  message("Grouping consecutive windows and slicing...")
+  # Ensure temp dir exists
+  if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
   
-  # Clear existing files in tmp folder unless resuming
-  file.remove(list.files(temp_dir, full.names = TRUE, recursive = TRUE))
+  # Require auto_class column
+  if (!"auto_class" %in% names(features_df)) {
+    stop("features_df must contain a column named 'auto_class'")
+  }
   
+  # Normalize auto_class to character
+  features_df[, auto_class := as.character(auto_class)]
+  
+  # Add logical flag for positive class
+  features_df[, is_positive := auto_class == positive_class]
+  
+  # Order by window index
+  setorder(features_df, window_index)
+  
+  # Identify runs based strictly on consecutive positives
+  features_df[, run_boundary := (get("is_positive") & !shift(get("is_positive"), fill = FALSE))]
+  features_df[, run_id := cumsum(run_boundary)]
+  features_df[!get("is_positive"), run_id := NA_integer_]
+  
+  # Collect unique run IDs
+  valid_runs <- na.omit(unique(features_df$run_id))
+  
+  clip_paths <- c()
+  run_metadata <- list()
+  
+  # Process each run
+  for (rid in valid_runs) {
+    run_windows <- features_df[run_id == rid]
+    
+    # Run start/end times (based only on actual positive windows)
+    start_time <- min(run_windows$start_time)
+    end_time   <- max(run_windows$end_time)
+    
+    # Extend to target_length if needed
+    if ((end_time - start_time) < target_length) {
+      end_time <- start_time + target_length
+    }
+    
+    # Add buffer outside of run bounds (only affects slice, not run detection)
+    slice_start <- max(0, start_time - buffer_time)
+    slice_end   <- min(end_time + buffer_time, length(full_wave@left) / full_wave@samp.rate)
+    
+    # Slice audio
+    clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
+    out_path <- file.path(temp_dir, paste0("run_", rid, ".wav"))
+    writeWave(clip, out_path)
+    
+    clip_paths <- c(clip_paths, out_path)
+    
+    # Store metadata
+    run_metadata[[as.character(rid)]] <- list(
+      run_id = rid,
+      windows = run_windows$window_index,
+      filepath = out_path
+    )
+    
+    # Update features_df with clip path
+    features_df[run_id == rid, clip_path := out_path]
+  }
+  
+  # Save updated features and full_wave
+  fwrite(features_df, file.path(temp_dir, "features.csv"))
   save(full_wave, file = file.path(temp_dir, "full_wave.RData"))
   
-  # Identify chunks of the positive class
-  positive_chunks <- features_df %>%
-    dplyr::filter(auto_class == positive_class) %>%
-    arrange(window_index) %>%
-    group_by(is_consecutive = c(0, cumsum(diff(window_index) != 1))) %>%
-    summarise(
-      start_index = first(window_index),
-      end_index = last(window_index),
-      start_time = first(start_time),
-      end_time = last(end_time),
-      chunk_id = cur_group_id(),
-      .groups = "drop" # Ensure correct grouping behavior
-    ) %>%
-    ungroup()
-  
-  # Identify negative windows and randomly sample a percentage
-  negative_windows <- features_df %>%
-    dplyr::filter(auto_class != positive_class)
-  
-  sample_size <- floor(nrow(negative_windows) * negative_percentage)
-  
-  if (sample_size > 0) {
-    sampled_negative_windows <- negative_windows %>%
-      sample_n(sample_size) %>%
-      arrange(window_index)
-    
-    # Create single-window chunks for each negative sample
-    max_chunk_id <- max(positive_chunks$chunk_id, 0)
-    
-    negative_chunks <- sampled_negative_windows %>%
-      mutate(
-        start_index = window_index,
-        end_index = window_index,
-        chunk_id = row_number() + max_chunk_id
-      ) %>%
-      select(start_index, end_index, start_time, end_time, chunk_id)
-    
-    # Combine positive and negative chunks
-    all_chunks <- bind_rows(positive_chunks, negative_chunks) %>%
-      arrange(start_time)
-  } else {
-    all_chunks <- positive_chunks
-  }
-  
-  # Create new chunk_id column in features_df and assign based on all_chunks
-  features_df$chunk_id <- NA
-  for (i in 1:nrow(all_chunks)) {
-    start <- all_chunks$start_index[i]
-    end <- all_chunks$end_index[i]
-    features_df$chunk_id[features_df$window_index >= start & features_df$window_index <= end] <- all_chunks$chunk_id[i]
-  }
-  
-  # Add a filepath column for the chunks
-  all_chunks$chunk_filepath <- NA
-  
-  # Slice and save the new audio files with a buffer
-  file_paths <- lapply(1:nrow(all_chunks), function(i) {
-    chunk <- all_chunks[i, ]
-    
-    # Calculate the buffered start and end times
-    # Note: centerpoint is already handled by start_time and end_time
-    # The buffer just adds time before the start and after the end.
-    buffered_start <- max(0, chunk$start_time - buffer_time)
-    buffered_end <- min(round(length(full_wave@left)/full_wave@samp.rate,2), chunk$end_time + buffer_time)
-    # Slice the wave object
-    sliced_wave <- cutw(full_wave, from = buffered_start, to = buffered_end, plot = FALSE, output = "Wave")
-    
-    #sliced_wave <- cutw(full_wave, from = buffered_start, to = buffered_end, plot = FALSE, output = "Wave")
-    # Normalize the data before writing
-    sliced_wave <- normalize(sliced_wave, unit = "16")
-    # Alternative slice as cutw causing errors
-    #sliced_wave <- Wave(full_wave@left[buffered_start:buffered_end], samp.rate = full_wave@samp.rate, bit = full_wave@bit)
-    
-    # Save the sliced wave file
-    file_name <- paste0("chunk_", chunk$chunk_id, "_", format(buffered_start, nsmall = 2), ".wav")
-    file_path <- file.path(temp_dir, file_name)
-    writeWave(sliced_wave, file_path)
-    
-    # Update the filepath column in the chunks data frame
-    all_chunks$chunk_filepath[i] <<- file_path
-    
-    return(file_path)
-  })
-  
-  # Update the original features_df with chunk_filepaths
-  features_df <- features_df %>%
-    left_join(all_chunks %>% select(chunk_id, chunk_filepath), by = "chunk_id") %>%
-    mutate(chunk_filepath = replace_na(chunk_filepath, "None"))
-  
-  # Save the features data.table for resuming later
-  data.table::fwrite(features_df, file.path(temp_dir, "features.csv"))
-  
-  # Return the list of file paths and the updated features data frame
-  return(list(file_paths = file_paths, updated_features_df = features_df))
+  return(list(
+    updated_features_df = features_df,
+    file_paths = clip_paths,
+    run_metadata = run_metadata
+  ))
 }
 
-
-#' Processes a WAV file, applies selected filters, and slices it into chunks.
-#'
-#' This function acts as the core audio processing engine. It reads a full WAV file,
-#' applies optional filtering as specified by the user's selections in the UI,
-#' generates a CSV of features and timestamps, and saves sliced audio files
-#' into a temporary directory.
-#'
-#' @param wav_path Path to the input WAV file.
-#' @param stationary_filter Logical, TRUE to apply stationary noise reduction.
-#' @param nonstationary_filter Logical, TRUE to apply non-stationary noise reduction.
-#' @param low_pass_hz Numeric, the low-pass frequency in Hz. Can be NULL.
-#' @param high_pass_hz Numeric, the high-pass frequency in Hz. Can be NULL.
-#' @return A data frame containing the generated features and timestamps.
-
-process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_pass_hz, high_pass_hz, window_size, window_overlap){
+# ---------------------------------------------------------
+# Classify and move (run_id-level)
+# ---------------------------------------------------------
+classify_and_move <- function(label, run_id, features_df, output_dir) {
+  stopifnot("run_id" %in% names(features_df))
+  stopifnot("filepath" %in% names(features_df))
   
-  message("Processing Audio...")
-
-  # Read in wav file
-  wav_obj <- readWave(wav_path)
+  # Subset rows for this run
+  run_rows <- features_df[run_id == !!run_id]
+  if (nrow(run_rows) == 0) stop(paste("No rows found for run_id =", run_id))
   
-  proc_wav <- wav_obj
+  # Assign label to auto_class column
+  features_df[run_id == !!run_id, auto_class := label]
   
-  sample_rate <- proc_wav@samp.rate
-  nyquist <- sample_rate/2
-  is_stereo <- proc_wav@stereo
-  signal_left <- as.numeric(proc_wav@left)
+  # Determine source file
+  src_file <- unique(run_rows$filepath)
+  if (length(src_file) != 1) stop(paste("Expected one filepath for run_id =", run_id,
+                                        "but found", length(src_file)))
   
-  if (is_stereo){
-    signal_right <- as.numeric(proc_wav@right)
-  }
+  # Destination directory
+  dest_dir <- file.path(output_dir, label)
+  if (!dir.exists(dest_dir)) dir.create(dest_dir, recursive = TRUE)
   
-  # Apply Noise Reduction
-  if (stationary_filter) {
-    message("Applying Stationary Noise Reduction...")
-    
-    py_left <- r_to_py(signal_left)
-    py_rate <- r_to_py(sample_rate)
-    
-    nr <- import("noisereduce")
-    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = TRUE)
-    signal_left <- as.numeric(py_to_r(new_signal))
-    rm(new_signal)
-    
-    if(is_stereo){
-      py_right <- r_to_py(signal_right)
-      new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = TRUE)
-      signal_right <- as.numeric(py_to_r(new_signal))
-      rm(new_signal)    
-    }
-    
-  }else if (nonstationary_filter) {
-    
-    message("Applying Non-Stationary Noise Reduction...")
-    
-    py_left <- r_to_py(signal_left)
-    py_rate <- r_to_py(sample_rate)
-    
-    nr <- import("noisereduce")
-    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = FALSE)
-    signal_left <- as.numeric(py_to_r(new_signal))
-    rm(new_signal)
-    
-    if(is_stereo){
-      py_right <- r_to_py(signal_right)
-      new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = FALSE)
-      signal_right <- as.numeric(py_to_r(new_signal))
-      rm(new_signal)    
-    }
-    
-  }
+  # Copy clip to destination
+  dest_file <- file.path(dest_dir, basename(src_file))
+  file.copy(src_file, dest_file, overwrite = TRUE)
   
-  if (is_stereo) {
-    proc_wav <- tuneR::Wave(left = signal_left, right = signal_right, samp.rate = sample_rate, bit = proc_wav@bit)
-  } else {
-    proc_wav <- tuneR::Wave(left = signal_left, samp.rate = sample_rate, bit = proc_wav@bit)
-  }
+  # Persist updated features.csv
+  fwrite(features_df, file.path(output_dir, "features.csv"))
   
-  # 2. Apply frequency filters
-  if ((!is.na(low_pass_hz) | !is.na(high_pass_hz))) {
-    message("Applying Frequency Filtering...")
-    # The ffilter() function handles low-pass, high-pass, and band-pass automatically
-    # based on which arguments are provided.
-    from_hz <- high_pass_hz
-    to_hz <- low_pass_hz
-    if (!is.na(from_hz) & !is.na(to_hz) && from_hz > to_hz) {
-      temp_hz <- from_hz
-      from_hz <- to_hz
-      to_hz <- temp_hz
-    }
-    
-    proc_wav <- ffilter(
-      proc_wav, 
-      from = from_hz, 
-      to = to_hz
-    )
-  }
-  
-  #Calculate Features
-  features_df <- calc_features(proc_wav, window_size, window_overlap)
-  
-  message("Audio Processing and Feature Calculation Complete.")
-  return(list(proc_wav = proc_wav, features_df =features_df))
-}
-
-#' Classifies the current audio snippet, moves the file, and updates the CSV.
-#' @param classification The classification string (e.g., "Squawk").
-#' @param chunk_path The path to the chunk file.
-#' @param features_df The updated features data frame from reactive state.
-classify_and_move <- function(classification, chunk_path, features_df) {
-  # Create the destination folder if it doesn't exist
-  dest_dir <- here("Output", classification)
-  if (!dir.exists(dest_dir)) {
-    dir.create(dest_dir)
-  }
-  
-  # Move the chunk file from the temp directory to the classified directory
-  file.rename(here(chunk_path), file.path(dest_dir, basename(chunk_path[[1]])))
-  
-  # Update the classification for all the windows in the original features file
-  chunk_id <- features_df %>% dplyr::filter(chunk_filepath == chunk_path) %>% pull(chunk_id) %>% .[!is.na(.)] %>% unique()
-  
-  if (length(chunk_id) > 0) {
-    all_features <- fread(here("Output","tmp", "features.csv"))
-    
-    # Update the user_class for all rows with the matching chunk ID
-    all_features[which(all_features$chunk_id == chunk_id), user_class := classification]
-    
-    # Save the updated master CSV
-    data.table::fwrite(all_features, here("Output","tmp", "features.csv"))
-    
-    # Append the rows to the classification-specific CSV
-    dest_csv_path <- file.path(dest_dir, paste0(classification, ".csv"))
-    
-    # Get the rows corresponding to the current chunk
-    # Now using the user_class column for the filepath in the CSV
-    rows_to_add <- all_features %>%
-      dplyr::filter(chunk_id == chunk_id) %>%
-      mutate(filepath = file.path(dest_dir, basename(chunk_path[[1]])))
-    
-    # Append to the CSV
-    data.table::fwrite(rows_to_add, dest_csv_path, append = TRUE, col.names = !file.exists(dest_csv_path))
-  }
+  return(features_df)
 }
