@@ -466,5 +466,97 @@ classify_and_move <- function(label, run_id, features_df = NULL,
   }
   
   message(sprintf("run_id=%s labelled '%s' and clip moved to: %s", run_id_int, label, new_clip_path))
+  
+  # --- Automatic cleanup if last run ---
+  if (nrow(remaining) == 0) {
+    ann_cleanup(temp_dir = temp_dir, output_dir = output_dir)
+    message("All runs classified — tmp folder cleaned automatically.")
+  }
+  
   invisible(remaining)
+}
+
+# Classification button
+classify_run <- function(features_df, runs_table, current_run_idx, label, temp_dir, output_dir) {
+  
+  # Guard: check runs_table exists and run index is valid
+  if (is.null(runs_table) || current_run_idx > nrow(runs_table)) return(features_df)
+  
+  current_run_id <- runs_table$run_id[current_run_idx]
+  if (length(current_run_id) == 0) return(features_df)
+  
+  # Call classify_and_move
+  updated_features <- classify_and_move(
+    label = label,
+    run_id = current_run_id,
+    features_df = features_df,
+    temp_dir = temp_dir,
+    output_dir = output_dir
+  )
+  
+  return(updated_features)
+}
+
+# Cleanup function
+ann_cleanup <- function(temp_dir = here("Output", "tmp"),
+                                      output_dir = here("Output")) {
+  features_path <- file.path(temp_dir, "features.csv")
+  null_csv <- file.path(output_dir, "Null_Annotations.csv")
+  
+  # Move or append remaining features
+  if (file.exists(features_path)) {
+    remaining_features <- fread(features_path)
+    
+    if (file.exists(null_csv)) {
+      # Append to existing Null_Annotations.csv
+      existing_null <- fread(null_csv)
+      combined <- rbind(existing_null, remaining_features, fill = TRUE)
+      fwrite(combined, null_csv)
+    } else {
+      # First-time creation
+      fwrite(remaining_features, null_csv)
+    }
+    
+    # Remove features.csv from tmp
+    unlink(features_path)
+  }
+  
+  # Remove all WAV files in tmp
+  wav_files <- list.files(temp_dir, pattern = "\\.wav$", full.names = TRUE)
+  if (length(wav_files) > 0) unlink(wav_files)
+  
+  # Optional: remove runs.csv
+  runs_path <- file.path(temp_dir, "runs.csv")
+  if (file.exists(runs_path)) unlink(runs_path)
+  
+  message("Temporary folder cleaned and Null_Annotations updated.")
+}
+
+# Helper: generate shapes for Plotly
+generate_shapes <- function(playhead = NULL, highlight = NULL) {
+  shapes <- list()
+  
+  # highlight rectangle
+  if(!is.null(highlight)) {
+    shapes[[length(shapes) + 1]] <- list(
+      type = "rect",
+      x0 = highlight$start,
+      x1 = highlight$end,
+      y0 = 0, y1 = 1, yref = "paper",
+      fillcolor = "rgba(255, 255, 0, 0.3)",
+      line = list(width = 0)
+    )
+  }
+  
+  # playhead line
+  if(!is.null(playhead)) {
+    shapes[[length(shapes) + 1]] <- list(
+      type = 'line',
+      x0 = playhead, x1 = playhead,
+      y0 = 0, y1 = 1, yref = 'paper',
+      line = list(color = 'red', dash = 'dash')
+    )
+  }
+  
+  shapes
 }
