@@ -313,12 +313,15 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
   
   # Persist outputs
   fwrite(features_df, file.path(temp_dir, "features.csv"))
+  
   # make runs table to save (with simpler structure)
   runs_export <- data.table(
     run_id = runs_dt$run_id,
     start_time = runs_dt$start_time,
     end_time = runs_dt$end_time,
-    filepath = clip_paths
+    filepath = clip_paths,
+    slice_start = sapply(run_metadata, function(x) x$slice_start),
+    slice_end   = sapply(run_metadata, function(x) x$slice_end)
   )
   fwrite(runs_export, file.path(temp_dir, "runs.csv"))
   save(full_wave, file = file.path(temp_dir, "full_wave.RData"))
@@ -559,4 +562,18 @@ generate_shapes <- function(playhead = NULL, highlight = NULL) {
   }
   
   shapes
+}
+
+# Helper function to avoid repeating the "unavailable" plot code
+show_unavailable_message <- function(chunk) {
+  plot_ly() %>%
+    layout(
+      xaxis = list(range = c(0, chunk$duration), title = "Time (s)"),
+      yaxis = list(title = "Frequency (kHz)", range = c(0, chunk$wave@samp.rate / 2000)),
+      annotations = list(
+        x = chunk$duration / 2, y = (chunk$wave@samp.rate / 2000) / 2,
+        text = "Spectrogram not available",
+        showarrow = FALSE, font = list(size = 16, color = "grey")
+      )
+    )
 }

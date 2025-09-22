@@ -47,86 +47,171 @@ server <- function(input, output, session) {
     req(seewave::duration(chunk_wave) > 0.001)
     duration <- seewave::duration(chunk_wave)
     
-    # Waveform
-    osc_data <- seewave::oscillo(chunk_wave@left, f = chunk_wave@samp.rate, plot = FALSE)
+    # --- FIX: Sanitize the audio signal ---
+    # Replace any non-finite values (NA, NaN, Inf) with 0 to prevent crashes.
+    signal_sanitized <- chunk_wave@left
+    signal_sanitized[!is.finite(signal_sanitized)] <- 0
+    # ----------------------------------------
+    
+    # Waveform (oscillo)
+    osc_data <- seewave::oscillo(signal_sanitized, f = chunk_wave@samp.rate, plot = FALSE)
     time_vector <- seq(0, duration, length.out = nrow(osc_data))
     
-    # Spectrogram
-    spec_data <- seewave::spectro(chunk_wave@left, f = chunk_wave@samp.rate,
-                                  plot = FALSE, osc = FALSE, tlim = c(0, duration))
+    # Spectrogram (spec object with $time, $freq, $amp)
+    spec_data <- seewave::spectro(signal_sanitized, f = chunk_wave@samp.rate,
+                                  plot = FALSE, osc = FALSE)
     
-    # Highlight times relative to sliced chunk
-    highlight <- NULL
-    times <- current_run_times()
-    if(!is.null(times)) {
-      # Determine chunk_start from runs table
-      chunk_start <- 0
-      if(!is.null(data_storage$runs_table)) {
-        slice_start <- data_storage$runs_table$start_time[run_idx]
-        if(!is.null(slice_start)) chunk_start <- slice_start
+    # Determine chunk_start (slice_start) if runs_table includes it
+    chunk_start <- 0
+    if (!is.null(data_storage$runs_table) && nrow(data_storage$runs_table) >= run_idx) {
+      # prefer slice_start column if exists (saved by group_and_slice_chunks)
+      if ("slice_start" %in% names(data_storage$runs_table)) {
+        ss <- data_storage$runs_table$slice_start[run_idx]
+        if (!is.na(ss)) chunk_start <- as.numeric(ss)
+      } else {
+        # fallback to start_time (absolute) — client audio is a sliced file so playhead is relative to slice start
+        ss2 <- data_storage$runs_table$start_time[run_idx]
+        if (!is.na(ss2)) chunk_start <- as.numeric(ss2)
       }
-      highlight <- list(
-        start = times$start - chunk_start,
-        end   = times$end - chunk_start
-      )
     }
     
-    # Return all chunk info
+    # Highlight times made relative to chunk_start, clipped to [0, duration]
+    highlight <- NULL
+    times <- current_run_times()
+    if (!is.null(times)) {
+      start_rel <- times$start - chunk_start
+      end_rel   <- times$end   - chunk_start
+      # clamp:
+      start_rel <- max(0, min(duration, start_rel))
+      end_rel   <- max(0, min(duration, end_rel))
+      highlight <- if (end_rel > start_rel) list(start = start_rel, end = end_rel) else list(start = start_rel, end = start_rel)
+    }
+    
     list(
-      chunk_path = chunk_path,
-      highlight = highlight,
-      wave = chunk_wave,
-      duration = duration,
-      osc_data = osc_data,
+      chunk_path  = chunk_path,
+      chunk_start = chunk_start,
+      highlight   = highlight,
+      wave        = chunk_wave,
+      duration    = duration,
+      osc_data    = osc_data,
       time_vector = time_vector,
-      spec_data = spec_data
+      spec_data   = spec_data
     )
   })
   
-  # --- Render plots once per chunk ---
+  # --- Render plots once per chunk (robust spectrogram & shapes) ---
   observeEvent(current_chunk_full(), {
     chunk <- current_chunk_full()
     
-    # compute waveform & spectrogram ranges
+    # compute waveform y-range
     y_range_wave <- range(chunk$osc_data[,1], na.rm = TRUE)
-    y_range_spec <- range(chunk$spec_data$freq, na.rm = TRUE)
+    if (any(!is.finite(y_range_wave))) y_range_wave <- c(-1, 1)
     
-    # Shapes (highlight + playhead)
-    shapes <- generate_shapes(highlight = chunk$highlight)
+    # Build shapes (highlight only here; playhead added on playhead updates)
+    shapes_base <- list()
+    if (!is.null(chunk$highlight)) {
+      shapes_base[[length(shapes_base) + 1]] <- list(
+        type = "rect",
+        x0 = chunk$highlight$start,
+        x1 = chunk$highlight$end,
+        y0 = 0, y1 = 1, yref = "paper",
+        fillcolor = "rgba(255, 255, 0, 0.3)",
+        line = list(width = 0)
+      )
+    }
+    # placeholder playhead line (x0==x1==0 until play begins)
+    shapes_base[[length(shapes_base) + 1]] <- list(
+      type = "line", x0 = 0, x1 = 0, y0 = 0, y1 = 1, yref = "paper",
+      line = list(color = "red", width = 2)
+    )
     
-    # Waveform plot
-    plotlyProxy("waveform_plot", session) %>%
-      plotlyProxyInvoke("restyle", list(x = list(chunk$time_vector), y = list(chunk$osc_data[,1]))) %>%
-      plotlyProxyInvoke("relayout", list(
-        shapes = shapes,
-        xaxis = list(range = c(0, chunk$duration)),
-        yaxis = list(range = y_range_wave)
-      ))
+    # Render waveform fresh for this chunk
+    output$waveform_plot <- renderPlotly({
+      plot_ly(
+        x = chunk$time_vector,
+        y = chunk$osc_data[,1],
+        type = 'scatter',
+        mode = 'lines',
+        hoverinfo = 'x+y',
+        name = "Waveform"
+      ) %>%
+        layout(
+          xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
+          yaxis = list(range = y_range_wave, fixedrange = TRUE, title = "Amplitude"),
+          shapes = shapes_base
+        )
+    })
     
-    # Spectrogram plot
-    plotlyProxy("spectrogram_plot", session) %>%
-      plotlyProxyInvoke("restyle", list(
-        z = list(t(chunk$spec_data$amp)),  # transpose
-        x = list(chunk$spec_data$time),
-        y = list(chunk$spec_data$freq)
-      )) %>%
-      plotlyProxyInvoke("relayout", list(
-        shapes = shapes,
-        xaxis = list(range = c(0, chunk$duration)),
-        yaxis = list(range = y_range_spec)
-      ))
+    # --- ROBUST SPECTROGRAM PLOTTING WITH SAFETY NET ---
+    output$spectrogram_plot <- renderPlotly({
+      # First, check if the spectro output is minimally valid (has dimensions)
+      if (!is.null(chunk$spec_data$amp) && all(dim(chunk$spec_data$amp) > 0)) {
+        
+        # --- OUTPUT SANITIZATION ---
+        # Create a clean copy and replace any NaN/Inf values from spectro's internals with 0.
+        amp_matrix <- chunk$spec_data$amp
+        amp_matrix[!is.finite(amp_matrix)] <- 0
+        # ---------------------------
+        
+        # Now, convert the guaranteed-clean matrix to dB
+        amp_db <- 20 * log10(amp_matrix)
+        finite_vals <- amp_db[is.finite(amp_db)]
+        
+        # This final check now only handles the true "all silent" case
+        if (length(finite_vals) > 0) {
+          # --- Plot the spectrogram ---
+          min_finite_db <- min(finite_vals, na.rm = TRUE)
+          amp_db[!is.finite(amp_db)] <- min_finite_db
+          
+          plot_ly(
+            z = amp_db, x = chunk$spec_data$time, y = chunk$spec_data$freq,
+            type = 'heatmap', colors = 'viridis', hoverinfo = 'x+y+z',
+            colorbar = list(title = "dB"), showscale = TRUE
+          ) %>%
+            layout(
+              xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
+              yaxis = list(title = "Frequency (kHz)"),
+              shapes = shapes_base
+            )
+        } else {
+          # Fallback for completely silent clips
+          show_unavailable_message(chunk)
+        }
+      } else {
+        # Fallback for empty/invalid spectro output
+        show_unavailable_message(chunk)
+      }
+    })
   })
   
-  # --- Update only playhead ---
+  # --- Update only playhead (fast) ---
   observeEvent(playhead_time(), {
+    # only update the red line x position (fast; doesn't recompute spectrogram)
     chunk <- current_chunk_full()
-    shapes <- generate_shapes(highlight = chunk$highlight, playhead = playhead_time())
+    # prepare shapes: keep highlight and add playhead line at current playhead time
+    shapes <- list()
+    if (!is.null(chunk$highlight)) {
+      shapes[[length(shapes)+1]] <- list(
+        type = "rect",
+        x0 = chunk$highlight$start,
+        x1 = chunk$highlight$end,
+        y0 = 0, y1 = 1, yref = "paper",
+        fillcolor = "rgba(255, 255, 0, 0.3)",
+        line = list(width = 0)
+      )
+    }
+    ph <- playhead_time()
+    # clamp to chunk duration
+    ph <- max(0, min(chunk$duration, as.numeric(ph)))
+    shapes[[length(shapes)+1]] <- list(
+      type = "line",
+      x0 = ph, x1 = ph, y0 = 0, y1 = 1, yref = "paper",
+      line = list(color = 'red', width = 2)
+    )
     
-    plotlyProxy("waveform_plot", session) %>%
-      plotlyProxyInvoke("relayout", list(shapes = shapes))
-    
-    plotlyProxy("spectrogram_plot", session) %>%
-      plotlyProxyInvoke("relayout", list(shapes = shapes))
+    # apply to both plots
+    plotlyProxy("waveform_plot", session) %>% plotlyProxyInvoke("relayout", list(shapes = shapes))
+    plotlyProxy("spectrogram_plot", session) %>% plotlyProxyInvoke("relayout", list(shapes = shapes))
   })
   
   # --- Temp directory & resource path ---
@@ -307,8 +392,9 @@ server <- function(input, output, session) {
     plot_ly(x = numeric(0), y = numeric(0), type = 'scatter', mode = 'lines', name = "Waveform") %>%
       layout(xaxis = list(title="Time (s)"), yaxis=list(title="Amplitude"), shapes=list())
   })
+  
   output$spectrogram_plot <- renderPlotly({
-    plot_ly(z = matrix(0,2,2), x=c(0,1), y=c(0,1), type='heatmap', colors='viridis', showscale=FALSE) %>%
+    plot_ly(type='heatmap', colors='viridis', showscale=FALSE) %>%
       layout(xaxis=list(title="Time (s)"), yaxis=list(title="Frequency (kHz)"), shapes=list())
   })
   
@@ -332,27 +418,6 @@ server <- function(input, output, session) {
         line=list(color="red", width=2)
       )
     )
-  })
-  
-  # --- Render plots once per chunk ---
-  observeEvent(current_chunk_full(), {
-    chunk <- current_chunk_full()
-    shapes <- chunk_shapes()
-    plotlyProxy("waveform_plot", session) %>%
-      plotlyProxyInvoke("restyle", list(x=list(chunk$time_vector), y=list(chunk$osc_data[,1]))) %>%
-      plotlyProxyInvoke("relayout", list(shapes=shapes))
-    plotlyProxy("spectrogram_plot", session) %>%
-      plotlyProxyInvoke("restyle", list(z=list(chunk$spec_data$amp), x=list(chunk$spec_data$time), y=list(chunk$spec_data$freq))) %>%
-      plotlyProxyInvoke("relayout", list(shapes=shapes))
-  })
-  
-  # --- Update only playhead ---
-  observeEvent(playhead_time(), {
-    shapes <- chunk_shapes()
-    shapes[[2]]$x0 <- playhead_time()
-    shapes[[2]]$x1 <- playhead_time()
-    plotlyProxy("waveform_plot", session) %>% plotlyProxyInvoke("relayout", list(shapes=shapes))
-    plotlyProxy("spectrogram_plot", session) %>% plotlyProxyInvoke("relayout", list(shapes=shapes))
   })
   
   # --- File info + progress ---
