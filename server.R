@@ -101,6 +101,7 @@ server <- function(input, output, session) {
   
   # --- Render plots once per chunk (robust spectrogram & shapes) ---
   observeEvent(current_chunk_full(), {
+    
     chunk <- current_chunk_full()
     
     # compute waveform y-range
@@ -143,44 +144,63 @@ server <- function(input, output, session) {
     })
     
     # --- ROBUST SPECTROGRAM PLOTTING WITH SAFETY NET ---
+    
+    # Find minimum db value & replace -Inf with it
+    amp_db <- chunk$spec_data$amp
+    finite_vals <- amp_db[is.finite(amp_db)]
+    min_db <- min(finite_vals, na.rm = TRUE)
+    amp_db[!is.finite(amp_db)] <- min_db
+    
+    
     output$spectrogram_plot <- renderPlotly({
-      # First, check if the spectro output is minimally valid (has dimensions)
-      if (!is.null(chunk$spec_data$amp) && all(dim(chunk$spec_data$amp) > 0)) {
-        
-        # --- OUTPUT SANITIZATION ---
-        # Create a clean copy and replace any NaN/Inf values from spectro's internals with 0.
-        amp_matrix <- chunk$spec_data$amp
-        amp_matrix[!is.finite(amp_matrix)] <- 0
-        # ---------------------------
-        
-        # Now, convert the guaranteed-clean matrix to dB
-        amp_db <- 20 * log10(amp_matrix)
-        finite_vals <- amp_db[is.finite(amp_db)]
-        
-        # This final check now only handles the true "all silent" case
-        if (length(finite_vals) > 0) {
-          # --- Plot the spectrogram ---
-          min_finite_db <- min(finite_vals, na.rm = TRUE)
-          amp_db[!is.finite(amp_db)] <- min_finite_db
-          
+      
           plot_ly(
             z = amp_db, x = chunk$spec_data$time, y = chunk$spec_data$freq,
-            type = 'heatmap', colors = 'viridis', hoverinfo = 'x+y+z',
-            colorbar = list(title = "dB"), showscale = TRUE
+            type = 'heatmap', colors = 'viridis', hoverinfo = 'x+y+z', showscale = FALSE
           ) %>%
             layout(
               xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
               yaxis = list(title = "Frequency (kHz)"),
               shapes = shapes_base
             )
-        } else {
-          # Fallback for completely silent clips
-          show_unavailable_message(chunk)
-        }
-      } else {
-        # Fallback for empty/invalid spectro output
-        show_unavailable_message(chunk)
-      }
+
+      # # First, check if the spectro output is minimally valid (has dimensions)
+      # if (!is.null(chunk$spec_data$amp) && all(dim(chunk$spec_data$amp) > 0)) {
+      #   
+      #   # # --- OUTPUT SANITIZATION ---
+      #   # # Create a clean copy and replace any NaN/Inf values from spectro's internals with 0.
+      #   # amp_matrix <- chunk$spec_data$amp
+      #   # amp_matrix[!is.finite(amp_matrix)] <- 0
+      #   # # ---------------------------
+      #   # 
+      #   # # Now, convert the guaranteed-clean matrix to dB
+      #   # amp_db <- 20 * log10(amp_matrix)
+      #   # finite_vals <- amp_db[is.finite(amp_db)]
+      #   
+      #   # This final check now only handles the true "all silent" case
+      #   if (length(finite_vals) > 0) {
+      #     # --- Plot the spectrogram ---
+      #     min_finite_db <- min(finite_vals, na.rm = TRUE)
+      #     amp_db[!is.finite(amp_db)] <- min_finite_db
+      #     
+      #     plot_ly(
+      #       z = amp_db, x = chunk$spec_data$time, y = chunk$spec_data$freq,
+      #       type = 'heatmap', colors = 'viridis', hoverinfo = 'x+y+z',
+      #       colorbar = list(title = "dB"), showscale = TRUE
+      #     ) %>%
+      #       layout(
+      #         xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
+      #         yaxis = list(title = "Frequency (kHz)"),
+      #         shapes = shapes_base
+      #       )
+      #   } else {
+      #     # Fallback for completely silent clips
+      #     show_unavailable_message(chunk)
+      #   }
+      # } else {
+      #   # Fallback for empty/invalid spectro output
+      #   show_unavailable_message(chunk)
+      # }
     })
   })
   

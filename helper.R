@@ -62,19 +62,20 @@ process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_p
     py_left <- r_to_py(signal_left)
     py_rate <- r_to_py(sample_rate)
     nr <- import("noisereduce")
-    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = TRUE)
+    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = TRUE, prop_decrease = 0.99)
     signal_left <- as.numeric(py_to_r(new_signal)); rm(new_signal)
     if (is_stereo) {
       py_right <- r_to_py(signal_right)
       new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = TRUE)
       signal_right <- as.numeric(py_to_r(new_signal)); rm(new_signal)
+
     }
   } else if (nonstationary_filter) {
     message("Applying Non-Stationary Noise Reduction...")
     py_left <- r_to_py(signal_left)
     py_rate <- r_to_py(sample_rate)
     nr <- import("noisereduce")
-    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = FALSE)
+    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = FALSE, prop_decrease = 0.99)
     signal_left <- as.numeric(py_to_r(new_signal)); rm(new_signal)
     if (is_stereo) {
       py_right <- r_to_py(signal_right)
