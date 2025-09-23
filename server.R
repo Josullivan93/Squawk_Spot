@@ -101,6 +101,7 @@ server <- function(input, output, session) {
   
   # --- Render plots once per chunk (robust spectrogram & shapes) ---
   observeEvent(current_chunk_full(), {
+    req(current_chunk_full())
     
     chunk <- current_chunk_full()
     
@@ -241,7 +242,6 @@ server <- function(input, output, session) {
   
   # --- UI Update Logic ---
   observeEvent(input$upload_file, {
-    shinyjs::hide("main_ui")
     temp_dir <- here("Output", "tmp")
     if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
     
@@ -297,6 +297,14 @@ server <- function(input, output, session) {
     data_storage$files_to_classify <- chunking_results$file_paths
     data_storage$current_run <- 1
     removeModal()
+    
+    showNotification("Processing complete!", type = "message")
+    
+    shinyjs::hide(id = "pre_process_sidebar")
+    shinyjs::show(id = "post_process_sidebar")
+    
+    shinyjs::hide(id = "main_placeholder")
+    shinyjs::show(id = "main_ui")
   })
   
   # --- Resume previous session ---
@@ -420,6 +428,7 @@ server <- function(input, output, session) {
   
   # --- Reactive: chunk shapes ---
   chunk_shapes <- reactive({
+    req(current_chunk_full())
     chunk <- current_chunk_full()
     list(
       # Highlight
