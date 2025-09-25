@@ -200,7 +200,7 @@ calc_features <- function(proc_wav, window_size, window_overlap) {
     entropy = first_entropy,
     skewness = first_skew,
     kurtosis = first_kurt,
-    flux = NA,
+    flux = as.numeric(NA),
     window_index = 1,
     start_time = 0,
     end_time = (win_len - 1) / samp_rate
