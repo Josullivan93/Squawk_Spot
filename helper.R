@@ -286,15 +286,18 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
     if ((ed - st) < target_length) ed <- st + target_length
     
     # buffer applies only to slice; it does NOT affect merging/detection logic
-    slice_start <- max(0, st - buffer_time)
-    slice_end   <- min(ed + buffer_time, dur)
+    slice_start <- max(0, st - buffer_time) * full_wave@samp.rate + 1
+    slice_end   <- min(ed + buffer_time, dur) * full_wave@samp.rate
     
     # slice and save
-    clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
+    #clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
+    clip <- full_wave@left[slice_start:slice_end]
+    clip <- Wave(left = clip, samp.rate = full_wave@samp.rate, bit = full_wave@bit, pcm = full_wave@pcm)
+    
     out_name <- paste0("run_", sprintf("%04d", rid),
                        "_", sprintf("%.2f-%.2f", slice_start, slice_end), ".wav")
     out_path <- file.path(temp_dir, out_name)
-    writeWave(clip, out_path)
+    savewav(clip, filename = out_path) # Use seewave::savwav as implementation of writeWave with normalise step included
     clip_paths[i] <- out_path
     
     # metadata
