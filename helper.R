@@ -1,7 +1,7 @@
 if (!require("pacman")) {
   install.packages("pacman")
   library(pacman)
-} 
+}
 p_load(here, tidyverse, data.table, signal, seewave, tuneR, parallel, future, future.apply, reticulate)
 # Set up and use a dedicated Python virtual environment for consistency
 if (!reticulate::virtualenv_exists("r-reticulate")) {
@@ -14,9 +14,7 @@ reticulate::py_config()
 
 # Helper Functions
 
-# ---------------------------
-# PSD and flux helpers (unchanged)
-# ---------------------------
+# PSD and flux helpers 
 psd_calc <- function(win_dat,
                      samp_rate,
                      fft_len = 2^ceiling(log2(length(win_dat)))
@@ -43,10 +41,7 @@ flux_calc <- function(psd_pair) {
   return(flux)
 }
 
-
-# ---------------------------
-# process_wav (unchanged flow, calls calc_features)
-# ---------------------------
+# process_wav
 process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_pass_hz, high_pass_hz, window_size, window_overlap) {
   message("Processing Audio...")
   wav_obj <- readWave(wav_path)
@@ -68,7 +63,7 @@ process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_p
       py_right <- r_to_py(signal_right)
       new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = TRUE)
       signal_right <- as.numeric(py_to_r(new_signal)); rm(new_signal)
-
+      
     }
   } else if (nonstationary_filter) {
     message("Applying Non-Stationary Noise Reduction...")
@@ -107,9 +102,7 @@ process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_p
   return(list(proc_wav = proc_wav, features_df = features_df))
 }
 
-# ---------------------------
-# process_single_window (unchanged)
-# ---------------------------
+# process_single_window
 process_single_window <- function(index, step_size, wav_data, win_len, samp_rate, fft_len) {
   start_sample <- ((index - 1) * step_size) + 1
   end_sample <- start_sample + win_len - 1
@@ -155,9 +148,7 @@ process_single_window <- function(index, step_size, wav_data, win_len, samp_rate
   ))
 }
 
-# ---------------------------
-# calc_features (unchanged except ensure user_class present)
-# ---------------------------
+# calc_features
 calc_features <- function(proc_wav, window_size, window_overlap) {
   message('Calculating Features...')
   plan(multisession, workers = round(parallel::detectCores() - 2))
@@ -200,11 +191,7 @@ calc_features <- function(proc_wav, window_size, window_overlap) {
     entropy = first_entropy,
     skewness = first_skew,
     kurtosis = first_kurt,
-<<<<<<< HEAD
-    flux = NA,
-=======
     flux = as.numeric(NA),
->>>>>>> UI_Cleanup
     window_index = 1,
     start_time = 0,
     end_time = (win_len - 1) / samp_rate
@@ -226,9 +213,7 @@ calc_features <- function(proc_wav, window_size, window_overlap) {
   return(final_features)
 }
 
-# ---------------------------
-# group_and_slice_chunks (patched)
-# ---------------------------
+# group_and_slice_chunks
 group_and_slice_chunks <- function(features_df, full_wave, positive_class,
                                    buffer_time = 1.0, temp_dir,
                                    target_length = 3.0) {
@@ -290,30 +275,21 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
     if ((ed - st) < target_length) ed <- st + target_length
     
     # buffer applies only to slice; it does NOT affect merging/detection logic
-<<<<<<< HEAD
-    slice_start <- max(0, st - buffer_time) * full_wave@samp.rate + 1
-    slice_end   <- min(ed + buffer_time, dur) * full_wave@samp.rate
+    slice_start <- max(0, st - buffer_time)
+    slice_end   <- min(ed + buffer_time, dur)
+    
+    # Convert start/end to sample index for slicing
+    slice_start_ind <- slice_start * full_wave@samp.rate + 1
+    slice_end_ind <-  slice_end * full_wave@samp.rate
     
     # slice and save
-    #clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
-    clip <- full_wave@left[slice_start:slice_end]
+    clip <- full_wave@left[slice_start_ind:slice_end_ind]
     clip <- Wave(left = clip, samp.rate = full_wave@samp.rate, bit = full_wave@bit, pcm = full_wave@pcm)
     
     out_name <- paste0("run_", sprintf("%04d", rid),
                        "_", sprintf("%.2f-%.2f", slice_start, slice_end), ".wav")
     out_path <- file.path(temp_dir, out_name)
     savewav(clip, filename = out_path) # Use seewave::savwav as implementation of writeWave with normalise step included
-=======
-    slice_start <- max(0, st - buffer_time)
-    slice_end   <- min(ed + buffer_time, dur)
-    
-    # slice and save
-    clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
-    out_name <- paste0("run_", sprintf("%04d", rid),
-                       "_", sprintf("%.2f-%.2f", slice_start, slice_end), ".wav")
-    out_path <- file.path(temp_dir, out_name)
-    writeWave(clip, out_path)
->>>>>>> UI_Cleanup
     clip_paths[i] <- out_path
     
     # metadata
@@ -354,10 +330,7 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
   ))
 }
 
-# ---------------------------
-# classify_and_move (patched signature)
-# ---------------------------
-# Accept call pattern used in server: classify_and_move(classification = "Squawk", run_id = 1, temp_dir = temp_dir, output_dir = output_dir)
+# classify_and_move
 classify_and_move <- function(label, run_id, features_df = NULL,
                               temp_dir = NULL, output_dir = NULL) {
   if (missing(label) || missing(run_id)) stop("label and run_id are required.")
@@ -522,7 +495,7 @@ classify_run <- function(features_df, runs_table, current_run_idx, label, temp_d
 
 # Cleanup function
 ann_cleanup <- function(temp_dir = here("Output", "tmp"),
-                                      output_dir = here("Output")) {
+                        output_dir = here("Output")) {
   features_path <- file.path(temp_dir, "features.csv")
   null_csv <- file.path(output_dir, "Null_Annotations.csv")
   

@@ -1,15 +1,15 @@
-# --- UI Definition ---
+# UI Definition
 
 if (!require("pacman")) {
   install.packages("pacman")
   library(pacman)
-} 
+}
 p_load(here, shiny, shinyjs, plotly)
 
-# --- Define UI ---
+# Define UI
 ui <- fluidPage(
   
-  # Use shinyjs for showing/hiding elements
+  # Use shinyjs for showing / hiding elements
   useShinyjs(),
   
   tags$head(
@@ -99,62 +99,62 @@ ui <- fluidPage(
     sidebarPanel(
       
       div(id = "pre_process_sidebar",
-        div(class = "file-upload-section",
-            h3("1. Upload or Resume"),
-            fileInput("upload_file", "Choose .wav File", accept = c(".wav")),
-            actionButton("process_btn", "Process File", class = "btn-primary", style = "margin-top: 10px;"),
-            actionButton("resume_btn", "Resume Session", class = "btn-primary", style = "margin-top: 10px;")
-        ),
-        
-        h3("2. Audio Processing Options"),
-        checkboxInput("stationary_filter", "Stationary Noise Reduction"),
-        checkboxInput("nonstationary_filter", "Non-Stationary Noise Reduction"),
-        numericInput("low_pass_hz", "Low-Pass Filter (Hz)", value = NULL),
-        numericInput("high_pass_hz", "High-Pass Filter (Hz)", value = NULL),
-        
-        h3("3. Feature Calculation"),
-        numericInput("window_size", "Window Size (seconds)", value = 0.3, min = 0.01, step = 0.01),
-        sliderInput("window_overlap", "Window Overlap (%)", min = 0, max = 99, value = 50),
-        
-        hr()
+          div(class = "file-upload-section",
+              h3("1. Upload or Resume"),
+              fileInput("upload_file", "Choose .wav File", accept = c(".wav")),
+              actionButton("process_btn", "Process File", class = "btn-primary", style = "margin-top: 10px;"),
+              actionButton("resume_btn", "Resume Session", class = "btn-primary", style = "margin-top: 10px;")
+          ),
+          
+          h3("2. Audio Processing Options"),
+          checkboxInput("stationary_filter", "Stationary Noise Reduction"),
+          checkboxInput("nonstationary_filter", "Non-Stationary Noise Reduction"),
+          numericInput("low_pass_hz", "Low-Pass Filter (Hz)", value = NULL),
+          numericInput("high_pass_hz", "High-Pass Filter (Hz)", value = NULL),
+          
+          h3("3. Feature Calculation"),
+          numericInput("window_size", "Window Size (seconds)", value = 0.3, min = 0.01, step = 0.01),
+          sliderInput("window_overlap", "Window Overlap (%)", min = 0, max = 99, value = 50),
+          
+          hr()
       ),
       
       shinyjs::hidden(
         div(id = "post_process_sidebar",
             
-          h3("4. Classify"),
-          
-          textOutput("file_info"),
-          
-          div(class = "progress-bar-wrapper",
-              div(id = "progress_bar", class = "progress-bar", style = "width: 0%;")
-          ),
-          
-          hr(),
-          
-          div(class = "button-grid",
-              actionButton("btn_squawk", "1) Squawk", class = "btn-primary"),
-              actionButton("btn_other", "2) Other Vocalisation", class = "btn-primary"),
-              actionButton("btn_unknown", "3) Unknown", class = "btn-primary"),
-              actionButton("btn_noise", "4) Noise", class = "btn-primary")
-          ),
-          
-          h4("Class Assigned Via Numeric Keypress or Buttons Below."),
-          
-          div(class = "button-row",
-              actionButton("btn_prev", "Previous", class = "btn-default"),
-              actionButton("btn_next", "Next", class = "btn-default")
-          ),
-          
-          hr(),
-          
-          div(id = "audio_container",
-              align="center",
-              uiOutput("audio_player")
-          ),
-          
-          # JavaScript to listen for hotkeys
-          tags$script(HTML("
+            h3("4. Classify"),
+            
+            textOutput("file_info"),
+            
+            div(class = "progress-bar-wrapper",
+                div(id = "progress_bar", class = "progress-bar", style = "width: 0%;")
+            ),
+            
+            hr(),
+            
+            div(class = "button-grid",
+                actionButton("btn_squawk", "1) Squawk", class = "btn-primary"),
+                actionButton("btn_other", "2) Other Vocalisation", class = "btn-primary"),
+                actionButton("btn_unknown", "3) Unknown", class = "btn-primary"),
+                actionButton("btn_noise", "4) Noise", class = "btn-primary")
+            ),
+            
+            h4("Class Assigned Via Numeric Keypress or Buttons Below."),
+            
+            div(class = "button-row",
+                actionButton("btn_prev", "Previous", class = "btn-default"),
+                actionButton("btn_next", "Next", class = "btn-default")
+            ),
+            
+            hr(),
+            
+            div(id = "audio_container",
+                align="center",
+                uiOutput("audio_player")
+            ),
+            
+            # JavaScript to listen for hotkeys
+            tags$script(HTML("
             $(window).on('keydown', function(event) {
               let inputId = null;
               switch (event.key) {
@@ -163,10 +163,10 @@ ui <- fluidPage(
                 case '3': inputId = 'hotkey_3'; break;
                 case '4': inputId = 'hotkey_4'; break;
               }
-              
+             
               if (inputId) {
                 event.preventDefault();
-                
+               
                 // This is the direct, official way to talk to the Shiny server.
                 // We pass the current time to ensure the value is always unique,
                 // which guarantees the observer will fire every single time.
@@ -190,21 +190,21 @@ ui <- fluidPage(
       # Actual UI hidden at startup
       shinyjs::hidden(
         div(
-            id = "main_ui", # ID to show/hide this entire section
-            
-            h3("Extracted Audio for Review"),
-            
-            # Use plotlyOutput instead of plotOutput
-            plotlyOutput("waveform_plot"),
-            
-            hr(),
-            
-            plotlyOutput("spectrogram_plot"),
-            
-            hr(),
-            
-            # JavaScript to send current audio playback time to the server
-            tags$script(HTML("
+          id = "main_ui", # ID to show/hide this entire section
+          
+          h3("Extracted Audio for Review"),
+          
+          # Use plotlyOutput instead of plotOutput
+          plotlyOutput("waveform_plot"),
+          
+          hr(),
+          
+          plotlyOutput("spectrogram_plot"),
+          
+          hr(),
+          
+          # JavaScript to send current audio playback time to the server
+          tags$script(HTML("
             var audio_player = document.getElementById('audio_element');
             if (audio_player) {
               audio_player.addEventListener('timeupdate', function() {

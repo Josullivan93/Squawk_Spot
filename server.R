@@ -10,7 +10,7 @@ source(here("helper.R"))
 
 options(shiny.maxRequestSize = 30*1024^2)
 
-# --- Server Definition ---
+# Server Definition
 server <- function(input, output, session) {
   
   # reactiveValues object for storing data
@@ -35,7 +35,7 @@ server <- function(input, output, session) {
     )
   })
   
-  # --- Combined Reactive: chunk info + audio data ---
+  # Combined Reactive: chunk info + audio data
   current_chunk_full <- reactive({
     req(data_storage$files_to_classify, data_storage$current_run)
     run_idx <- data_storage$current_run
@@ -96,8 +96,7 @@ server <- function(input, output, session) {
     )
   })
   
-  # --- FIX 1: DEFINE PLOT OUTPUTS ONCE, GUARDED WITH req() ---
-  # This section replaces the problematic observeEvent that was wrapping the renderPlotly calls.
+# DEFINE PLOT OUTPUTS
   
   output$waveform_plot <- renderPlotly({
     req(current_chunk_full())
@@ -147,7 +146,7 @@ server <- function(input, output, session) {
       )
   })
   
-  # --- Update only playhead (fast) ---
+  # Update only playhead (fast)
   observeEvent(playhead_time(), {
     req(current_chunk_full()) # Ensure chunk data exists before updating
     chunk <- current_chunk_full()
@@ -170,12 +169,12 @@ server <- function(input, output, session) {
     plotlyProxy("spectrogram_plot", session) %>% plotlyProxyInvoke("relayout", list(shapes = shapes))
   })
   
-  # --- Temp directory & resource path ---
+  # Temp directory & resource path
   temp_dir <- here("Output", "tmp")
   if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
   addResourcePath("temp_audio", temp_dir)
   
-  # --- UI Update Logic ---
+  # UI Update Logic
   observeEvent(input$upload_file, {
     shinyjs::hide("main_ui")
     temp_dir <- here("Output", "tmp")
@@ -207,15 +206,15 @@ server <- function(input, output, session) {
     if (!is.null(data_storage$features)) shinyjs::show("main_ui")
   })
   
-  # --- File Processing and Chunking ---
+  # File Processing and Chunking
   observeEvent(input$process_btn, {
     req(input$upload_file)
-    showModal(modalDialog( 
+    showModal(modalDialog(
       div(
         style = "text-align: center;",
         
         # Add the 'class' argument here
-        tags$img(src = "loader.gif", height = "140px", width = "140px", class = "circular-image"), 
+        tags$img(src = "loader.gif", height = "140px", width = "140px", class = "circular-image"),
         
         p("Processing File...")
       ),
@@ -257,7 +256,7 @@ server <- function(input, output, session) {
     shinyjs::show(id = "main_ui")
   })
   
-  # --- Resume previous session ---
+  # Resume previous session
   observeEvent(input$resume_btn, {
     data_storage$features <- fread(file.path(temp_dir, "features.csv"))
     if (file.exists(file.path(temp_dir, "runs.csv"))) {
@@ -269,7 +268,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # --- Navigation & Classification ---
+  # Navigation & Classification
   observeEvent(list(input$btn_squawk, input$hotkey_1), {
     data_storage$features <- classify_run(
       features_df = data_storage$features,
@@ -318,12 +317,12 @@ server <- function(input, output, session) {
     data_storage$current_run <- data_storage$current_run + 1
   })
   
-  # --- Navigation & Classification ---
+  # Navigation & Classification
   
   observeEvent(input$btn_next, { data_storage$current_run <- data_storage$current_run + 1 })
   observeEvent(input$btn_prev, { data_storage$current_run <- max(1, data_storage$current_run - 1) })
   
-  # --- Audio Player UI ---
+  # Audio Player UI
   output$audio_player <- renderUI({
     req(current_chunk_full())
     chunk <- current_chunk_full()
@@ -353,8 +352,8 @@ server <- function(input, output, session) {
   })
   
   observeEvent(input$current_time, { playhead_time(input$current_time) })
-
-  # --- File info + progress ---
+  
+  # File info + progress
   output$file_info <- renderText({
     req(data_storage$files_to_classify, data_storage$current_run)
     total_runs <- length(data_storage$files_to_classify)
