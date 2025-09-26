@@ -4,11 +4,11 @@ if (!require("pacman")) {
 }
 p_load(here, tidyverse, data.table, signal, seewave, tuneR, parallel, future, future.apply, reticulate)
 # Set up and use a dedicated Python virtual environment for consistency
-if (!reticulate::virtualenv_exists("r-reticulate")) {
-  message("Creating Python virtual environment 'r-reticulate'...")
-  reticulate::virtualenv_create("r-reticulate", packages = c("noisereduce", "scipy", "numpy"))
-}
-reticulate::use_virtualenv("r-reticulate", required = TRUE)
+# if (!reticulate::virtualenv_exists("r-reticulate")) {
+#   message("Creating Python virtual environment 'r-reticulate'...")
+#   reticulate::virtualenv_create("r-reticulate", packages = c("noisereduce", "scipy", "numpy"))
+# }
+# reticulate::use_virtualenv("r-reticulate", required = TRUE)
 
 
 # Helper Functions
