@@ -12,12 +12,6 @@ Encoding: UTF-8
 RnwWeave: knitr
 LaTeX: XeLaTeX
 
-<<<<<<< HEAD
-PythonType: conda
-PythonVersion: 3.11.9
-PythonPath: F:/J-OSu/.conda/PileDetect/python.exe
-=======
 PythonType: system
 PythonVersion: 3.13.7
 PythonPath: /usr/local/bin/python3
->>>>>>> UI_Cleanup
