@@ -149,7 +149,19 @@ process_single_window <- function(index, step_size, wav_data, win_len, samp_rate
 # calc_features
 calc_features <- function(proc_wav, window_size, window_overlap) {
   message('Calculating Features...')
-  plan(multisession, workers = round(parallel::detectCores() - 2))
+  
+  # Set parallel plan safely for server environments
+  # Use a maximum of 2 workers to stay within typical shared resource limits.
+  if (Sys.getenv("R_CONFIG_ACTIVE") == "shinyapps" || Sys.getenv("SHINY_SERVER_VERSION") != "") {
+    # Server environment (Posit Connect, shinyapps.io, etc.)
+    message("Detected Server Environment - adjusting parallel plan.")
+    plan(multisession, workers = 2)
+  } else {
+    # Local environment
+    message("Detected Local Environment - adjusting parallel plan.")
+    plan(multisession, workers = round(parallel::detectCores() - 2))
+  }
+  
   samp_rate <- proc_wav@samp.rate
   wav_data <- proc_wav@left
   win_len <- round(window_size * samp_rate)
