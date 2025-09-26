@@ -2,6 +2,13 @@
 .Rhistory
 .RData
 .Ruserdata
+<<<<<<< HEAD
 .DS_Store
 Old
 Output
+=======
+Squawk_Spot.Rproj
+Output
+Old
+.DS_Store
+>>>>>>> UI_Cleanup

@@ -200,7 +200,11 @@ calc_features <- function(proc_wav, window_size, window_overlap) {
     entropy = first_entropy,
     skewness = first_skew,
     kurtosis = first_kurt,
+<<<<<<< HEAD
     flux = NA,
+=======
+    flux = as.numeric(NA),
+>>>>>>> UI_Cleanup
     window_index = 1,
     start_time = 0,
     end_time = (win_len - 1) / samp_rate
@@ -286,6 +290,7 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
     if ((ed - st) < target_length) ed <- st + target_length
     
     # buffer applies only to slice; it does NOT affect merging/detection logic
+<<<<<<< HEAD
     slice_start <- max(0, st - buffer_time) * full_wave@samp.rate + 1
     slice_end   <- min(ed + buffer_time, dur) * full_wave@samp.rate
     
@@ -298,6 +303,17 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
                        "_", sprintf("%.2f-%.2f", slice_start, slice_end), ".wav")
     out_path <- file.path(temp_dir, out_name)
     savewav(clip, filename = out_path) # Use seewave::savwav as implementation of writeWave with normalise step included
+=======
+    slice_start <- max(0, st - buffer_time)
+    slice_end   <- min(ed + buffer_time, dur)
+    
+    # slice and save
+    clip <- cutw(full_wave, from = slice_start, to = slice_end, output = "Wave")
+    out_name <- paste0("run_", sprintf("%04d", rid),
+                       "_", sprintf("%.2f-%.2f", slice_start, slice_end), ".wav")
+    out_path <- file.path(temp_dir, out_name)
+    writeWave(clip, out_path)
+>>>>>>> UI_Cleanup
     clip_paths[i] <- out_path
     
     # metadata
