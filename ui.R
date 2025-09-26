@@ -132,14 +132,16 @@ ui <- fluidPage(
             
             hr(),
             
+            h4("Class Assigned Via Numeric Keypress or Buttons Below:"),
+            
+            hr(),
+            
             div(class = "button-grid",
                 actionButton("btn_squawk", "1) Squawk", class = "btn-primary"),
                 actionButton("btn_other", "2) Other Vocalisation", class = "btn-primary"),
                 actionButton("btn_unknown", "3) Unknown", class = "btn-primary"),
                 actionButton("btn_noise", "4) Noise", class = "btn-primary")
             ),
-            
-            h4("Class Assigned Via Numeric Keypress or Buttons Below."),
             
             div(class = "button-row",
                 actionButton("btn_prev", "Previous", class = "btn-default"),

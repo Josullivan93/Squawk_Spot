@@ -18,7 +18,8 @@ server <- function(input, output, session) {
     features = NULL,
     current_run = 1,
     files_to_classify = NULL,
-    full_wave_object = NULL
+    full_wave_object = NULL,
+    runs_table = NULL
   )
   
   # Reactive value for the playhead time
@@ -167,6 +168,18 @@ server <- function(input, output, session) {
     
     plotlyProxy("waveform_plot", session) %>% plotlyProxyInvoke("relayout", list(shapes = shapes))
     plotlyProxy("spectrogram_plot", session) %>% plotlyProxyInvoke("relayout", list(shapes = shapes))
+  })
+  
+  # Update progress bar
+  observeEvent(data_storage$current_run, {
+    req(data_storage$files_to_classify)
+    
+    progress <- (data_storage$current_run - 1) / length(data_storage$files_to_classify) * 100
+    
+    # Use shinyjs to update the style of the progress bar
+    shinyjs::runjs(paste0(
+      "document.getElementById('progress_bar').style.width = '", progress, "%';"
+    ))
   })
   
   # Temp directory & resource path
