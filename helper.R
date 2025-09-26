@@ -9,7 +9,6 @@ if (!reticulate::virtualenv_exists("r-reticulate")) {
   reticulate::virtualenv_create("r-reticulate", packages = c("noisereduce", "scipy", "numpy"))
 }
 reticulate::use_virtualenv("r-reticulate", required = TRUE)
-reticulate::py_config()
 
 
 # Helper Functions
