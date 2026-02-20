@@ -5,10 +5,14 @@ if (!require("pacman")) {
   library(pacman)
 }
 
-p_load(here, shiny, dplyr, data.table, seewave, tuneR, shinyjs, plotly)
+p_load(here, shiny, dplyr, data.table, seewave, tuneR, shinyjs, plotly, ranger)
 source(here("helper.R"))
 
 options(shiny.maxRequestSize = 30*1024^2)
+
+# Path to your final trained models
+#path_vocal_model <- here("models", "final_vocal_model.rds")
+squawk_model <- readRDS(here("models", "final_squawk_model.rds"))
 
 # Server Definition
 server <- function(input, output, session) {
@@ -52,16 +56,23 @@ server <- function(input, output, session) {
     req(seewave::duration(chunk_wave) > 0.001)
     duration <- seewave::duration(chunk_wave)
     
-    # Sanitize the audio signal
-    signal_sanitized <- chunk_wave@left
-    signal_sanitized[!is.finite(signal_sanitized)] <- 0
+    # Get sample rate
+    sample_rate <- chunk_wave@samp.rate
+    nyquist <- sample_rate/2
+    
+    # Check stereo and convert to mono if so
+    is_stereo <- chunk_wave@stereo
+    if(is_stereo) chunk_wave <- mono(chunk_wave, which = "both")
+    
+    # Type conversion: Map integers to decimals
+    chunk_wave@left <- as.numeric(chunk_wave@left) / 32768
     
     # Waveform (oscillo)
-    osc_data <- seewave::oscillo(signal_sanitized, f = chunk_wave@samp.rate, plot = FALSE)
+    osc_data <- seewave::oscillo(chunk_wave@left, f = sample_rate, plot = FALSE)
     time_vector <- seq(0, duration, length.out = nrow(osc_data))
     
     # Spectrogram
-    spec_data <- seewave::spectro(signal_sanitized, f = chunk_wave@samp.rate,
+    spec_data <- seewave::spectro(chunk_wave@left, f = sample_rate,
                                   plot = FALSE, osc = FALSE)
     
     # Determine chunk_start (slice_start)
@@ -100,6 +111,7 @@ server <- function(input, output, session) {
 # DEFINE PLOT OUTPUTS
   
   output$waveform_plot <- renderPlotly({
+    req(data_storage$current_run <= length(data_storage$files_to_classify))
     req(current_chunk_full())
     chunk <- current_chunk_full()
     
@@ -235,34 +247,50 @@ server <- function(input, output, session) {
       easyClose = FALSE
     ))
     
-    processing_results <- process_wav(
-      wav_path = input$upload_file$datapath,
-      stationary_filter = input$stationary_filter,
-      nonstationary_filter = input$nonstationary_filter,
-      low_pass_hz = input$low_pass_hz,
-      high_pass_hz = input$high_pass_hz,
-      window_size = input$window_size,
-      window_overlap = input$window_overlap
-    )
+    # 
     
-    data_storage$full_wave_object <- processing_results$proc_wav
+    features_df <- extract_features(input$upload_file$datapath, p_cfg = list(
+      label           = "NonStat_PreEmph",
+      noise_reduction = "ns",
+      win_len         = 100, 
+      overlap         = 0.75,
+      pre_emph_coeff  = 0.97,
+      filter_type     = "None",
+      cutoff_highpass = NULL,
+      cutoff_lowpass  = NULL,
+      filter_order    = 4,
+      normalise       = TRUE
+    ))
     
+    # 3. Predict probabilities using the loaded models
+    # We extract only the probability column for the target class
+    #prob_vocal  <- predict(model_vocal,  features_df)$predictions[, "vocalisation"]
+    prob_squawk <- predict(squawk_model, features_df)$predictions[, "1"]
+    features_df$prob_squawk <- prob_squawk
+    features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Squawk", "Background")
+    
+    # 4. Store the wave (Needed for the UI plots)
+    data_storage$full_wave_object <- readWave(input$upload_file$datapath)
+    
+    # 6. Group windows into 'Runs' and slice audio files
+    # This uses the 'is_candidate' column to decide what to extract
     chunking_results <- group_and_slice_chunks(
-      features_df = processing_results$features_df,
-      full_wave = data_storage$full_wave_object,
-      positive_class = "Squawk",
-      buffer_time = 1.0,
-      temp_dir = temp_dir
+      features_df    = features_df,
+      full_wave      = data_storage$full_wave_object,
+      positive_class = "Squawk", # Tell the function to look at our candidate logic
+      buffer_time    = 1.0,           # 1 second before/after for context
+      temp_dir       = temp_dir
     )
     
+    # 7. Update reactive storage
     data_storage$features <- chunking_results$updated_features_df
     data_storage$runs_table <- chunking_results$runs_table
     data_storage$files_to_classify <- chunking_results$file_paths
     data_storage$current_run <- 1
+    
     removeModal()
-    
-    showNotification("Processing complete!", type = "message")
-    
+    showNotification(paste0("Processing complete! Found ", nrow(chunking_results$runs_table), " candidates."), 
+                     type = "message")
     shinyjs::hide(id = "pre_process_sidebar")
     shinyjs::show(id = "post_process_sidebar")
     shinyjs::hide(id = "main_placeholder")
@@ -283,6 +311,8 @@ server <- function(input, output, session) {
   
   # Navigation & Classification
   observeEvent(list(input$btn_squawk, input$hotkey_1), {
+    req(data_storage$current_run <= length(data_storage$files_to_classify))
+    
     data_storage$features <- classify_run(
       features_df = data_storage$features,
       runs_table = data_storage$runs_table,
@@ -292,6 +322,7 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    check_completion()
   })
   
   observeEvent(list(input$btn_other, input$hotkey_2), {
@@ -332,8 +363,22 @@ server <- function(input, output, session) {
   
   # Navigation & Classification
   
-  observeEvent(input$btn_next, { data_storage$current_run <- data_storage$current_run + 1 })
+  observeEvent(input$btn_next, { 
+    data_storage$current_run <- data_storage$current_run + 1 
+    check_completion()
+    })
   observeEvent(input$btn_prev, { data_storage$current_run <- max(1, data_storage$current_run - 1) })
+  
+  # Restart button
+  observeEvent(input$restart_app, {
+    shinyjs::hide("completion_ui")
+    shinyjs::show("pre_process_sidebar")
+    shinyjs::show("main_placeholder")
+    # Reset data storage
+    data_storage$features <- NULL
+    data_storage$current_run <- 1
+    data_storage$files_to_classify <- NULL
+  })
   
   # Audio Player UI
   output$audio_player <- renderUI({

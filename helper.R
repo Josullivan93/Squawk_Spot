@@ -2,225 +2,337 @@ if (!require("pacman")) {
   install.packages("pacman")
   library(pacman)
 }
-p_load(here, tidyverse, data.table, signal, seewave, tuneR, parallel, future, future.apply, reticulate)
-# Set up and use a dedicated Python virtual environment for consistency
-# if (!reticulate::virtualenv_exists("r-reticulate")) {
-#   message("Creating Python virtual environment 'r-reticulate'...")
-#   reticulate::virtualenv_create("r-reticulate", packages = c("noisereduce", "scipy", "numpy"))
-# }
-# reticulate::use_virtualenv("r-reticulate", required = TRUE)
+p_load(
+  future.apply, tidyverse, matrixStats, seewave, tuneR, 
+  reticulate, here, progress, signal, data.table
+)
+
+# 1. Python Environment Setup ----
+# This runs once when source(helper.R) is called by server.R
+cat("Setting up Python environment...\n")
+tryCatch({
+  if (!reticulate::virtualenv_exists("r-reticulate")) {
+    reticulate::virtualenv_create("r-reticulate", packages = c("numpy", "scipy", "noisereduce"))
+  }
+  reticulate::use_virtualenv("r-reticulate", required = TRUE)
+  nr <- import("noisereduce", convert = FALSE)
+  cat("Python (noisereduce) loaded successfully.\n")
+}, error = function(e) {
+  warning("Python setup failed. Noise reduction will be unavailable. Error: ", e$message)
+})
 
 # Helper Functions
 
-# PSD and flux helpers 
-psd_calc <- function(win_dat,
-                     samp_rate,
-                     fft_len = 2^ceiling(log2(length(win_dat)))
-) {
-  spec_out <- tryCatch({
-    seewave::spec(win_dat, f = samp_rate, wl = fft_len, wn = "hanning",
-                  PSD = TRUE, norm = FALSE, dB = NULL, plot = FALSE)
-  }, error = function(e) {
-    warning("Could not compute spectrum: ", e$message)
-    return(NULL)
-  })
-  return(spec_out)
+# Noise Reduction
+noise_reduce_channel <- function(channel_py, sr_py, nr_flag, nr_object){
+  # Apply noise reduction (prop_decrease = 0.75 for balance)
+  signal_float <- nr_object$reduce_noise(y = channel_py, sr = sr_py, stationary = nr_flag, prop_decrease = 0.75)
+  return(as.numeric(py_to_r(signal_float)))
 }
 
-flux_calc <- function(psd_pair) {
-  spec_curr <- psd_pair$curr
-  spec_prev <- psd_pair$prev
-  if (is.null(spec_curr) || is.null(spec_prev) ||
-      !is.matrix(spec_curr) || !is.matrix(spec_prev) ||
-      nrow(spec_curr) != nrow(spec_prev)) {
-    return(NA_real_)
-  }
-  flux <- sqrt(sum((spec_curr[, 2] - spec_prev[, 2])^2, na.rm = TRUE))
-  return(flux)
-}
-
-# process_wav
-process_wav <- function(wav_path, stationary_filter, nonstationary_filter, low_pass_hz, high_pass_hz, window_size, window_overlap) {
-  message("Processing Audio...")
-  wav_obj <- readWave(wav_path)
-  proc_wav <- wav_obj
-  sample_rate <- proc_wav@samp.rate
-  is_stereo <- proc_wav@stereo
-  signal_left <- as.numeric(proc_wav@left)
-  if (is_stereo) signal_right <- as.numeric(proc_wav@right)
+# Preprocess Wav
+preprocess_wav <- function(path,                  # Full filepath of wav file
+                           pre_emph_coeff = NULL, # Pre-emphasis coefficient (0.9 to 1, e.g. 0.97)
+                           noise_reduction = "None", # Noise Reduction "none", "s", "ns"
+                           filter_type = "None",  # "lowpass", "highpass", "bandpass", "none"
+                           cutoff_highpass = NULL,     # Lower frequency cutoff (Hz) for highpass or bandpass
+                           cutoff_lowpass = NULL,    # Upper frequency cutoff (Hz) for lowpass or bandpass
+                           filter_order = 4,       # Butterworth filter order
+                           normalise = TRUE        # Peak normalisation
+){
+  # Match arguments
+  noise_reduction <- match.arg(tolower(noise_reduction), c("none", "s", "ns"))
+  filter_type <- match.arg(tolower(filter_type), c("none", "lowpass", "highpass", "bandpass"))
   
-  # noise reduction via python (unchanged)
-  if (stationary_filter) {
-    message("Applying Stationary Noise Reduction...")
-    py_left <- r_to_py(signal_left)
-    py_rate <- r_to_py(sample_rate)
-    nr <- import("noisereduce")
-    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = TRUE, prop_decrease = 0.99)
-    signal_left <- as.numeric(py_to_r(new_signal)); rm(new_signal)
-    if (is_stereo) {
-      py_right <- r_to_py(signal_right)
-      new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = TRUE)
-      signal_right <- as.numeric(py_to_r(new_signal)); rm(new_signal)
+  # Load wav from path
+  wav_obj <- readWave(path)
+  
+  sample_rate <- wav_obj@samp.rate
+  nyquist <- sample_rate/2
+  is_stereo <- wav_obj@stereo
+  
+  # Type Conversion: Map integers (-32768:32767) to decimals (-1:1)
+  wav_obj@left <- as.numeric(wav_obj@left) / 32768
+  if(wav_obj@stereo) wav_obj@right <- as.numeric(wav_obj@right) / 32768
+  wav_obj@bit <- 32 # change wav metadata
+  wav_obj@pcm <- FALSE
+  
+  # Remove DC component
+  wav_obj@left <- wav_obj@left - mean(wav_obj@left, na.rm = TRUE)
+  if(wav_obj@stereo) wav_obj@right <- wav_obj@right - mean(wav_obj@right, na.rm = TRUE)
+  
+  
+  # Apply Pre-emphasis
+  if (!is.null(pre_emph_coeff)){
+    
+    b <- c(1, -pre_emph_coeff) # Filter Coefficients
+    a <- 1 # Denominator coefficient
+    
+    wav_obj@left <- as.numeric(signal::filter(b, a, as.numeric(wav_obj@left)))
+    
+    if(is_stereo){
+      wav_obj@right <- as.numeric(signal::filter(b, a, as.numeric(wav_obj@right)))
+    }
+    
+  }
+  
+  # Apply Band filters
+  
+  if (filter_type != "none"){
+    
+    filter_coeffs <- NULL
+    
+    if (filter_type == "lowpass"){
+      if (is.null(cutoff_lowpass)) stop("cutoff_lowpass must be provided for lowpass filter.")
+      if (cutoff_lowpass <= 0 || cutoff_lowpass >= nyquist) stop("cutoff_lowpass must be between 0 and Nyquist frequency (", nyquist, " Hz).")
+      Wn <- cutoff_lowpass / nyquist
+      filter_coeffs <- butter(n = filter_order, W = Wn, type = "low")
       
+    } else if (filter_type == "highpass"){
+      if (is.null(cutoff_highpass)) stop("cutoff_highpass must be provided for highpass filter.")
+      if (cutoff_highpass <= 0 || cutoff_highpass >= nyquist) stop("cutoff_highpass must be between 0 and Nyquist frequency (", nyquist, " Hz).")
+      Wn <- cutoff_highpass / nyquist
+      filter_coeffs <- butter(n = filter_order, W = Wn, type = "high")
+      
+    } else if (filter_type == "bandpass"){
+      if (is.null(cutoff_highpass) || is.null(cutoff_lowpass)) stop("cutoff_highpass and cutoff_lowpass must be provided for bandpass filter.")
+      if (cutoff_highpass <= 0 || cutoff_lowpass <= 0 || cutoff_highpass >= cutoff_lowpass || cutoff_lowpass >= nyquist) {
+        stop("Bandpass cutoffs must satisfy 0 < cutoff_highpass < cutoff_lowpass < Nyquist frequency (", nyquist, " Hz).")
+      }
+      Wn <- c(cutoff_highpass / nyquist, cutoff_lowpass / nyquist)
+      filter_coeffs <- butter(n = filter_order, W = Wn, type = "pass")
+      
+    } else {
+      stop("Invalid filter_type. Choose 'lowpass', 'highpass', 'bandpass', or 'none'.")
     }
-  } else if (nonstationary_filter) {
-    message("Applying Non-Stationary Noise Reduction...")
-    py_left <- r_to_py(signal_left)
-    py_rate <- r_to_py(sample_rate)
-    nr <- import("noisereduce")
-    new_signal <- nr$reduce_noise(y = py_left, sr = py_rate, stationary = FALSE, prop_decrease = 0.99)
-    signal_left <- as.numeric(py_to_r(new_signal)); rm(new_signal)
-    if (is_stereo) {
-      py_right <- r_to_py(signal_right)
-      new_signal <- nr$reduce_noise(y = py_right, sr = py_rate, stationary = FALSE)
-      signal_right <- as.numeric(py_to_r(new_signal)); rm(new_signal)
+    
+    # Apply filter
+    if (!is.null(filter_coeffs)){
+      wav_obj@left <- filtfilt(filter_coeffs, as.numeric(wav_obj@left))
+      if(is_stereo){
+        wav_obj@right <- filtfilt(filter_coeffs, as.numeric(wav_obj@right))
+      }
     }
   }
   
-  if (is_stereo) {
-    proc_wav <- tuneR::Wave(left = signal_left, right = signal_right, samp.rate = sample_rate, bit = proc_wav@bit)
-  } else {
-    proc_wav <- tuneR::Wave(left = signal_left, samp.rate = sample_rate, bit = proc_wav@bit)
-  }
-  
-  # frequency filtering (unchanged)
-  if ((!is.na(low_pass_hz) | !is.na(high_pass_hz))) {
-    message("Applying Frequency Filtering...")
-    from_hz <- high_pass_hz
-    to_hz <- low_pass_hz
-    if (!is.na(from_hz) & !is.na(to_hz) && from_hz > to_hz) {
-      temp_hz <- from_hz; from_hz <- to_hz; to_hz <- temp_hz
+  # Apply Noise Reduction
+  # Requires confirmation that python is loaded and ready
+  if ( noise_reduction != "none"){
+    
+    # Pass to python
+    left_py <- r_to_py(wav_obj@left)
+    sr_py <- r_to_py(wav_obj@samp.rate)
+    
+    # set flag based on noise_reduction argument
+    nr_flag <- ifelse(noise_reduction == "s", TRUE, FALSE)
+    
+    wav_obj@left <- noise_reduce_channel(left_py, sr_py, nr_flag, nr)
+    rm(left_py)
+    
+    if(is_stereo){
+      
+      right_py <- r_to_py(wav_obj@right)
+      wav_obj@right <- noise_reduce_channel(right_py, sr_py, nr_flag, nr)
+      rm(right_py)
     }
-    proc_wav <- ffilter(proc_wav, from = from_hz, to = to_hz)
+    
   }
   
-  # Calculate features (calls calc_features below)
-  features_df <- calc_features(proc_wav, window_size, window_overlap)
-  message("Audio Processing and Feature Calculation Complete.")
-  return(list(proc_wav = proc_wav, features_df = features_df))
+  if (normalise == TRUE) {
+    
+    # Remove DC Offset (Center the wave at zero)
+    wav_obj@left <- wav_obj@left - mean(wav_obj@left, na.rm = TRUE)
+    if(wav_obj@stereo) {
+      wav_obj@right <- wav_obj@right - mean(wav_obj@right, na.rm = TRUE)
+    }
+    
+    # Get the absolute maximum across all channels to maintain stereo balance
+    max_val <- max(abs(c(wav_obj@left, if(wav_obj@stereo) wav_obj@right else NULL)))
+    
+    # Avoid division by zero for silent files
+    if (max_val > 0) {
+      # Scaling to 0.9 (approx -1dB) to avoid clipping during any subsequent processing
+      wav_obj@left <- (wav_obj@left / max_val) * 0.9
+      if (wav_obj@stereo) {
+        wav_obj@right <- (wav_obj@right / max_val) * 0.9
+      }
+    }
+  }
+  
+  # return processed wav
+  return(wav_obj)
+  
 }
 
-# process_single_window
-process_single_window <- function(index, step_size, wav_data, win_len, samp_rate, fft_len) {
-  start_sample <- ((index - 1) * step_size) + 1
-  end_sample <- start_sample + win_len - 1
-  if (end_sample > length(wav_data)) return(NULL)
-  window_audio <- wav_data[start_sample:end_sample]
-  prev_start_sample <- ((index - 2) * step_size) + 1
-  prev_end_sample <- prev_start_sample + win_len - 1
-  prev_window_audio <- wav_data[prev_start_sample:prev_end_sample]
+
+# Feature Extraction
+
+calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
+  # If stereo audio then convert to mono
+  if(wav_input@stereo) wav_input <- mono(wav_input, which = "both")
+  # Store just the signal for manipulation
+  samples <- wav_input@left
   
-  rms_val <- NA; spec_centroid_val <- NA; spec_entropy_val <- NA
-  spec_skew_val <- NA; spec_kurt_val <- NA; flux_val <- NA
+  #Sample rate
+  sr <- wav_input@samp.rate
+  window_samps <- round((window_ms / 1000) * sr)
+  hop_samps <- window_samps * (1 - overlap)
+  # FFT length
+  fft_len <- 2^ceiling(log2(window_samps))
   
-  tryCatch({
-    rms_val <- sqrt(mean(window_audio^2, na.rm = TRUE))
-    psd_obj <- psd_calc(window_audio, samp_rate = samp_rate, fft_len = fft_len)
-    spec_props <- tryCatch({
-      seewave::specprop(spec = psd_obj, f = samp_rate, plot = FALSE)
-    }, error = function(e) {
-      warning("Could not compute spectral properties: ", e$message); return(NULL)
-    })
-    if (!is.null(spec_props)) {
-      spec_centroid_val <- spec_props$cent
-      spec_entropy_val <- spec_props$sh
-      spec_skew_val <- spec_props$skewness
-      spec_kurt_val <- spec_props$kurtosis
+  # Feature Caclulation
+  # Pre-calculate MFCCs
+  all_mels <- tuneR::melfcc(wav_input, numcep = 13, wintime = window_ms/1000, 
+                            hoptime = hop_samps/sr, preemph = 0)
+  mels_t <- t(all_mels)
+  delta_mels <- tuneR::deltas(mels_t)
+  delta_delta_mels <- t(tuneR::deltas(delta_mels))
+  delta_mels <- t(delta_mels)
+  
+  # Pre-calc spectra
+  zp_req <- (fft_len-window_samps) - ((fft_len-window_samps)%%2)
+  res <- seewave::spectro(wav_input@left, f= sr, wl = window_samps, ovlp = overlap * 100, zp = zp_req, wn = "hanning",
+                          plot = FALSE, norm = FALSE, dB = NULL)
+  spec_matrix <- res$amp
+  freqs_khz <- res$freq
+  
+  # Calculate number of windows and trim mfcc and spec to match
+  #n_frames <- floor((length(samples) - window_samps) / hop_samps) + 1
+  n_frames <- min(ncol(spec_matrix), nrow(all_mels))
+  spec_matrix <- spec_matrix[, 1:n_frames]
+  all_mels <- all_mels[ 1:n_frames, ]
+  
+  # Spectral Slope (Algebraic)
+  # This is much faster than doing it inside the loop and/or via Linear Regression
+  x_bar <- mean(freqs_khz, na.rm = TRUE)
+  x_diff <- freqs_khz - x_bar
+  slope_denom <- sum(x_diff^2)
+  # colSums and matrix multiplication are significantly faster than apply(..., 2)
+  #slopes <- colSums(x_diff * (spec_matrix - colMeans(spec_matrix))) / slope_denom
+  slopes <- colSums(x_diff * (spec_matrix - matrixStats::colMeans2(spec_matrix))) / slope_denom
+  
+  # Spectral Flux
+  spec_diffs <- spec_matrix[, 2:n_frames] - spec_matrix[, 1:(n_frames-1)]
+  flux <- c(NA, sqrt(colSums(spec_diffs^2)))
+  
+  # Spectral Difference Variance (DFV)
+  #dfv_vals <- c(0, apply(abs(spec_diffs), 2, var))
+  dfv_vals <- c(NA, matrixStats::colVars(abs(spec_diffs)))
+  
+  # Loop for functions that cannot be vectorised (reduce overhead)
+  starts <- round(seq(1, length(samples) - window_samps, length.out = n_frames))
+  
+  # Pre-allocate results for loop-based features
+  time_feats <- matrix(NA_real_, nrow = n_frames, ncol = 6) # RMS, ZCR, F0_mean, F0_sd, Crest, TempEnt
+  spec_props_list <- vector("list", n_frames)
+
+  for (i in 1:n_frames) {
+    
+    chunk <- samples[starts[i]:(starts[i] + window_samps - 1)]
+    
+    # Time Domain
+    rms_val <-  sqrt(mean(chunk^2, na.rm = TRUE))
+    time_feats[i, 1] <- rms_val  # RMS
+    time_feats[i, 2] <- sum(abs(diff(sign(chunk))) / 2) / (length(chunk) - 1) # ZCR
+    
+    # SpecProp (Requires a 2-col matrix input)
+    spec_props_list[[i]] <- as.data.frame(seewave::specprop(cbind(freqs_khz, spec_matrix[, i]), f = sr))
+    
+    # F0 tracking
+    f0_res <- tryCatch({
+      seewave::fund(chunk, f = sr, wl = min(fft_len, 512), ovlp = 0, plot = FALSE)
+    }, error = function(e) { NULL })
+    
+    if (!is.null(f0_res)) {
+      valid_f0 <- f0_res[!is.na(f0_res[, 2]) & f0_res[, 2] > 0, 2]
+      if (length(valid_f0) > 1) { # Requires at least 2 points for a valid SD
+        time_feats[i, 3] <- mean(valid_f0, na.rm = TRUE) * 1000
+        time_feats[i, 4] <- sd(valid_f0, na.rm = TRUE) * 1000
+      } else if (length(valid_f0) == 1) {
+        time_feats[i, 3] <- valid_f0 * 1000
+        time_feats[i, 4] <- NA # We have a mean, but no measurable variance
+      } else {
+        time_feats[i, 3:4] <- NA # No pitch found
+      }
+    } else {
+      time_feats[i, 3:4] <- NA # Error in fund()
     }
-    psd_prev <- psd_calc(prev_window_audio, samp_rate = samp_rate, fft_len = fft_len)
-    if (!is.null(psd_obj) && !is.null(psd_prev)) flux_val <- flux_calc(list(prev = psd_prev, curr = psd_obj))
-  }, error = function(e) {
-    warning(paste("Window index", index, ": Could not compute features:", e$message))
-  })
+    
+    peak_val <- max(abs(chunk))
+    time_feats[i, 5] <- if(rms_val > 0) peak_val / rms_val else 0 # Crest factor
+    
+    if(rms_val > 0){
+      env_chunk <- seewave::env(chunk, f = sr, plot=FALSE, norm = TRUE)
+      time_feats[i, 6] <- seewave::sh(env_chunk) # Temporal Shannon Entropy
+    } else {
+      time_feats[i, 6] <- 0
+    }
+    
+  }
   
-  return(list(
-    rms = rms_val,
-    centroid = spec_centroid_val,
-    entropy = spec_entropy_val,
-    skewness = spec_skew_val,
-    kurtosis = spec_kurt_val,
-    flux = flux_val,
-    window_index = index,
-    start_time = (start_sample - 1) / samp_rate,
-    end_time = (end_sample - 1) / samp_rate
-  ))
+  mfcc_df <- as.data.frame(all_mels[1:n_frames, ])
+  mfcc_d1_df <- as.data.frame(delta_mels[1:n_frames, ])
+  mfcc_d2_df <- as.data.frame(delta_delta_mels[1:n_frames, ])
+  colnames(mfcc_df) <- paste0("mfcc", 1:ncol(mfcc_df))
+  colnames(mfcc_d1_df) <- paste0("d1_mfcc", 1:ncol(mfcc_d1_df))
+  colnames(mfcc_d2_df) <- paste0("d2_mfcc", 1:ncol(mfcc_d2_df))
+  
+  # Final Assembly
+  final_df <- data.frame(
+    window_index = 1:n_frames,
+    start_time = (starts - 1) / sr,
+    end_time = (starts - 1 + window_samps) / sr,
+    rms_energy = time_feats[, 1],
+    zcr = time_feats[, 2],
+    spectral_slope = slopes,
+    spectral_flux = flux,
+    spec_dfv = dfv_vals,
+    f0_mean = time_feats[, 3],
+    f0_sd = time_feats[, 4],
+    crest_factor = time_feats[, 5],
+    temporal_entropy = time_feats[, 6]
+  ) %>% 
+    cbind(dplyr::bind_rows(spec_props_list), mfcc_df, mfcc_d1_df, mfcc_d2_df) %>%
+    dplyr::select(-any_of("prec"))
+  
+  return(final_df)
+  
 }
 
-# calc_features
-calc_features <- function(proc_wav, window_size, window_overlap) {
-  message('Calculating Features...')
+extract_features <- function(audio_path, p_cfg = list()) {
   
-  # Set parallel plan safely for server environments
-  # Use a maximum of 2 workers to stay within typical shared resource limits.
-  if (Sys.getenv("R_CONFIG_ACTIVE") == "shinyapps" || Sys.getenv("SHINY_SERVER_VERSION") != "") {
-    # Server environment (Posit Connect, shinyapps.io, etc.)
-    message("Detected Server Environment - adjusting parallel plan.")
-    plan(multisession, workers = 2)
-  } else {
-    # Local environment
-    message("Detected Local Environment - adjusting parallel plan.")
-    plan(multisession, workers = round(parallel::detectCores() - 2))
-  }
-  
-  samp_rate <- proc_wav@samp.rate
-  wav_data <- proc_wav@left
-  win_len <- round(window_size * samp_rate)
-  step_size <- floor(win_len * (1 - window_overlap / 100))
-  num_windows <- floor((length(wav_data) - win_len) / step_size) + 1
-  standard_fft_len <- 2^ceiling(log2(win_len))
-  message(paste("Processing", num_windows, "windows in parallel..."))
-  
-  results_list <- future.apply::future_lapply(
-    X = 2:num_windows,
-    FUN = process_single_window,
-    future.chunk.size = 1000,
-    step_size = step_size,
-    wav_data = wav_data,
-    win_len = win_len,
-    samp_rate = samp_rate,
-    fft_len = standard_fft_len,
-    future.packages = c("seewave")
+  # 1. Pre-process (Noise Reduction)
+  message(paste0("Processing: ", tools::file_path_sans_ext(audio_path)))
+  # This returns a transient wave object or a temporary path to a cleaned file
+  cleaned_wave <- preprocess_wav(audio_path,
+                                 pre_emph_coeff = p_cfg$pre_emph_coeff,
+                                 noise_reduction = p_cfg$noise_reduction,
+                                 filter_type = p_cfg$filter_type,
+                                 cutoff_highpass = p_cfg$cutoff_highpass,
+                                 cutoff_lowpass = p_cfg$cutoff_lowpass,
+                                 filter_order = p_cfg$filter_order,
+                                 normalise = p_cfg$normalise
   )
   
-  message("Combining features and finalising...")
-  first_window <- wav_data[1:win_len]
-  first_psd <- psd_calc(first_window, samp_rate = samp_rate, fft_len = standard_fft_len)
-  first_spec <- tryCatch({
-    seewave::specprop(spec = first_psd, f = samp_rate, plot = FALSE)
-  }, error = function(e) { warning("Could not compute spectral properties: ", e$message); return(NULL) })
-  
-  first_cent <- NA; first_entropy <- NA; first_skew <- NA; first_kurt <- NA
-  if (!is.null(first_spec)) {
-    first_cent <- first_spec$cent; first_entropy <- first_spec$sh
-    first_skew <- first_spec$skewness; first_kurt <- first_spec$kurtosis
-  }
-  
-  features_1 <- list(
-    rms = sqrt(mean(first_window^2, na.rm = TRUE)),
-    centroid = first_cent,
-    entropy = first_entropy,
-    skewness = first_skew,
-    kurtosis = first_kurt,
-    flux = as.numeric(NA),
-    window_index = 1,
-    start_time = 0,
-    end_time = (win_len - 1) / samp_rate
+  if (is.null(cleaned_wave)) stop("Pre-processing failed.")
+  message("Processing Complete.")
+  # 2. Feature Calculation
+  # This runs the FFTs, MFCCs, and spectral math on the cleaned wave
+  message("Calculating Features...")
+  features_df <- calc_features(wav_input = cleaned_wave,
+                               window_ms = p_cfg$win_len,
+                               overlap = p_cfg$overlap
   )
+  message("Feature Calculation Complete.")
+  # 3. Metadata Tagging
+  # We add the method options used here so it's baked into the dataframe
+  features_df <- features_df %>%
+    mutate(
+      file_id      = tools::file_path_sans_ext(basename(audio_path)),
+      proc_id      = p_cfg$label # Human-readable ID for the config
+    )
   
-  valid_results <- results_list[!sapply(results_list, is.null)]
-  all_results_list <- c(list(features_1), valid_results)
-  final_features <- rbindlist(all_results_list, fill = TRUE)
-  setorder(final_features, window_index)
-  
-  # Add classification columns
-  final_features$auto_class <- "Unclassified"
-  final_features$user_class <- "Unclassified"
-  
-  for (i in 1:nrow(final_features)) {
-    final_features$auto_class[i] <- ifelse(final_features$rms[i] > 28.32544 & final_features$centroid[i] > 1635.022, "Squawk", "Non-Squawk")
-  }
-  
-  return(final_features)
+  return(features_df)
 }
 
 # group_and_slice_chunks
@@ -579,4 +691,16 @@ show_unavailable_message <- function(chunk) {
         showarrow = FALSE, font = list(size = 16, color = "grey")
       )
     )
+}
+
+# Helper to handle completion
+check_completion <- function() {
+  if (data_storage$current_run > length(data_storage$files_to_classify)) {
+    shinyjs::hide("main_ui")
+    shinyjs::hide("post_process_sidebar")
+    shinyjs::show("completion_ui") # We will add this to ui.R
+    showNotification("Session Complete! All candidates reviewed.", type = "message")
+    return(TRUE)
+  }
+  return(FALSE)
 }
