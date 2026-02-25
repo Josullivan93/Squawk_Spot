@@ -322,7 +322,7 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
-    check_completion()
+    check_completion(data_storage)
   })
   
   observeEvent(list(input$btn_other, input$hotkey_2), {
@@ -335,6 +335,7 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    check_completion(data_storage)
   })
   
   observeEvent(list(input$btn_unknown, input$hotkey_3), {
@@ -347,6 +348,7 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    check_completion(data_storage)
   })
   
   observeEvent(list(input$btn_noise, input$hotkey_4), {
@@ -359,13 +361,14 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    check_completion(data_storage)
   })
   
   # Navigation & Classification
   
   observeEvent(input$btn_next, { 
     data_storage$current_run <- data_storage$current_run + 1 
-    check_completion()
+    check_completion(data_storage)
     })
   observeEvent(input$btn_prev, { data_storage$current_run <- max(1, data_storage$current_run - 1) })
   

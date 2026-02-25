@@ -694,7 +694,7 @@ show_unavailable_message <- function(chunk) {
 }
 
 # Helper to handle completion
-check_completion <- function() {
+check_completion <- function(data_storage) {
   if (data_storage$current_run > length(data_storage$files_to_classify)) {
     shinyjs::hide("main_ui")
     shinyjs::hide("post_process_sidebar")
