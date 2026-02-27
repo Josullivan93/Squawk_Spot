@@ -52,7 +52,13 @@ ui <- fluidPage(
               actionButton("btn_next", "Skip/Next")
             ),
             br(),
-            p(tags$small("Hotkeys: 1, 2, 3, 4 for classification"))
+            p(tags$small("Hotkeys: 1, 2, 3, 4 for classification")),
+            
+            h4("Plotting Options"),
+            
+            # Toggle highlight off
+            checkboxInput("show_highlight", "Show/Hide Squawk Highlight", value = TRUE),
+            br()
         )
       )
     ),

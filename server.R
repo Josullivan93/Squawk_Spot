@@ -121,10 +121,10 @@ server <- function(input, output, session) {
     if (any(!is.finite(y_range_wave))) y_range_wave <- c(-1, 1)
     
     shapes_base <- list()
-    if (!is.null(chunk$highlight)) {
+    if (input$show_highlight && !is.null(chunk$highlight)) {
       shapes_base[[1]] <- list(
         type = "rect", x0 = chunk$highlight$start, x1 = chunk$highlight$end,
-        y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(255, 255, 0, 0.3)", line = list(width = 0)
+        y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(227, 79, 38, 0.3)", line = list(width = 0)
       )
     }
     
@@ -146,7 +146,7 @@ server <- function(input, output, session) {
     amp_db[!is.finite(amp_db)] <- min_db
     
     shapes_base <- list()
-    if (!is.null(chunk$highlight)) {
+    if (input$show_highlight && !is.null(chunk$highlight)) {
       shapes_base[[1]] <- list(
         type = "rect", x0 = chunk$highlight$start, x1 = chunk$highlight$end,
         y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(227, 79, 38, 0.3)", line = list(width = 0.5, color = "rgba(227, 79, 38, 1)")
@@ -167,7 +167,7 @@ server <- function(input, output, session) {
     chunk <- current_chunk_full()
     
     shapes <- list()
-    if (!is.null(chunk$highlight)) {
+    if (input$show_highlight && !is.null(chunk$highlight)) {
       shapes[[1]] <- list(
         type = "rect", x0 = chunk$highlight$start, x1 = chunk$highlight$end,
         y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(227, 79, 38, 0.3)", line = list(width = 0.5, color = "rgba(227, 79, 38, 1)")
