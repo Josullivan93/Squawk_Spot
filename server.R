@@ -13,7 +13,9 @@ options(shiny.maxRequestSize = 30*1024^2)
 # Path to your final trained models
 #path_vocal_model <- here("models", "final_vocal_model.rds")
 squawk_model <- readRDS(here("models", "final_squawk_model.rds"))
-
+# Extract feature names
+features_used <- squawk_model$forest$independent.variable.names
+message(features_used)
 # Server Definition
 server <- function(input, output, session) {
   
@@ -322,7 +324,7 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
-    check_completion()
+    check_completion(data_storage)
   })
   
   observeEvent(list(input$btn_other, input$hotkey_2), {
@@ -335,6 +337,7 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    check_completion(data_storage)
   })
   
   observeEvent(list(input$btn_unknown, input$hotkey_3), {
@@ -347,6 +350,7 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    check_completion(data_storage)
   })
   
   observeEvent(list(input$btn_noise, input$hotkey_4), {
@@ -359,13 +363,14 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    check_completion(data_storage)
   })
   
   # Navigation & Classification
   
   observeEvent(input$btn_next, { 
     data_storage$current_run <- data_storage$current_run + 1 
-    check_completion()
+    check_completion(data_storage)
     })
   observeEvent(input$btn_prev, { data_storage$current_run <- max(1, data_storage$current_run - 1) })
   

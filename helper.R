@@ -204,71 +204,71 @@ calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
   
   # Spectral Slope (Algebraic)
   # This is much faster than doing it inside the loop and/or via Linear Regression
-  x_bar <- mean(freqs_khz, na.rm = TRUE)
-  x_diff <- freqs_khz - x_bar
-  slope_denom <- sum(x_diff^2)
+  #x_bar <- mean(freqs_khz, na.rm = TRUE)
+  #x_diff <- freqs_khz - x_bar
+  #slope_denom <- sum(x_diff^2)
   # colSums and matrix multiplication are significantly faster than apply(..., 2)
   #slopes <- colSums(x_diff * (spec_matrix - colMeans(spec_matrix))) / slope_denom
-  slopes <- colSums(x_diff * (spec_matrix - matrixStats::colMeans2(spec_matrix))) / slope_denom
+  #slopes <- colSums(x_diff * (spec_matrix - matrixStats::colMeans2(spec_matrix))) / slope_denom
   
   # Spectral Flux
-  spec_diffs <- spec_matrix[, 2:n_frames] - spec_matrix[, 1:(n_frames-1)]
-  flux <- c(NA, sqrt(colSums(spec_diffs^2)))
+  #spec_diffs <- spec_matrix[, 2:n_frames] - spec_matrix[, 1:(n_frames-1)]
+  #flux <- c(NA, sqrt(colSums(spec_diffs^2)))
   
   # Spectral Difference Variance (DFV)
   #dfv_vals <- c(0, apply(abs(spec_diffs), 2, var))
-  dfv_vals <- c(NA, matrixStats::colVars(abs(spec_diffs)))
+  #dfv_vals <- c(NA, matrixStats::colVars(abs(spec_diffs)))
   
   # Loop for functions that cannot be vectorised (reduce overhead)
   starts <- round(seq(1, length(samples) - window_samps, length.out = n_frames))
   
   # Pre-allocate results for loop-based features
-  time_feats <- matrix(NA_real_, nrow = n_frames, ncol = 6) # RMS, ZCR, F0_mean, F0_sd, Crest, TempEnt
-  spec_props_list <- vector("list", n_frames)
+  #time_feats <- matrix(NA_real_, nrow = n_frames, ncol = 6) # RMS, ZCR, F0_mean, F0_sd, Crest, TempEnt
+  #spec_props_list <- vector("list", n_frames)
 
-  for (i in 1:n_frames) {
+  #for (i in 1:n_frames) {
     
-    chunk <- samples[starts[i]:(starts[i] + window_samps - 1)]
+    #chunk <- samples[starts[i]:(starts[i] + window_samps - 1)]
     
     # Time Domain
-    rms_val <-  sqrt(mean(chunk^2, na.rm = TRUE))
-    time_feats[i, 1] <- rms_val  # RMS
-    time_feats[i, 2] <- sum(abs(diff(sign(chunk))) / 2) / (length(chunk) - 1) # ZCR
+    #rms_val <-  sqrt(mean(chunk^2, na.rm = TRUE))
+    #time_feats[i, 1] <- rms_val  # RMS
+    #time_feats[i, 2] <- sum(abs(diff(sign(chunk))) / 2) / (length(chunk) - 1) # ZCR
     
     # SpecProp (Requires a 2-col matrix input)
-    spec_props_list[[i]] <- as.data.frame(seewave::specprop(cbind(freqs_khz, spec_matrix[, i]), f = sr))
+    #spec_props_list[[i]] <- as.data.frame(seewave::specprop(cbind(freqs_khz, spec_matrix[, i]), f = sr))
     
     # F0 tracking
-    f0_res <- tryCatch({
-      seewave::fund(chunk, f = sr, wl = min(fft_len, 512), ovlp = 0, plot = FALSE)
-    }, error = function(e) { NULL })
+    #f0_res <- tryCatch({
+    #  seewave::fund(chunk, f = sr, wl = min(fft_len, 512), ovlp = 0, plot = FALSE)
+    #}, error = function(e) { NULL })
     
-    if (!is.null(f0_res)) {
-      valid_f0 <- f0_res[!is.na(f0_res[, 2]) & f0_res[, 2] > 0, 2]
-      if (length(valid_f0) > 1) { # Requires at least 2 points for a valid SD
-        time_feats[i, 3] <- mean(valid_f0, na.rm = TRUE) * 1000
-        time_feats[i, 4] <- sd(valid_f0, na.rm = TRUE) * 1000
-      } else if (length(valid_f0) == 1) {
-        time_feats[i, 3] <- valid_f0 * 1000
-        time_feats[i, 4] <- NA # We have a mean, but no measurable variance
-      } else {
-        time_feats[i, 3:4] <- NA # No pitch found
-      }
-    } else {
-      time_feats[i, 3:4] <- NA # Error in fund()
-    }
+    #if (!is.null(f0_res)) {
+    #  valid_f0 <- f0_res[!is.na(f0_res[, 2]) & f0_res[, 2] > 0, 2]
+    #  if (length(valid_f0) > 1) { # Requires at least 2 points for a valid SD
+    #    time_feats[i, 3] <- mean(valid_f0, na.rm = TRUE) * 1000
+    #    time_feats[i, 4] <- sd(valid_f0, na.rm = TRUE) * 1000
+    #  } else if (length(valid_f0) == 1) {
+    #    time_feats[i, 3] <- valid_f0 * 1000
+    #    time_feats[i, 4] <- NA # We have a mean, but no measurable variance
+    #  } else {
+    #    time_feats[i, 3:4] <- NA # No pitch found
+    #  }
+    #} else {
+    #  time_feats[i, 3:4] <- NA # Error in fund()
+    #}
     
-    peak_val <- max(abs(chunk))
-    time_feats[i, 5] <- if(rms_val > 0) peak_val / rms_val else 0 # Crest factor
+    #peak_val <- max(abs(chunk))
+    #time_feats[i, 5] <- if(rms_val > 0) peak_val / rms_val else 0 # Crest factor
     
-    if(rms_val > 0){
-      env_chunk <- seewave::env(chunk, f = sr, plot=FALSE, norm = TRUE)
-      time_feats[i, 6] <- seewave::sh(env_chunk) # Temporal Shannon Entropy
-    } else {
-      time_feats[i, 6] <- 0
-    }
+    #if(rms_val > 0){
+    #  env_chunk <- seewave::env(chunk, f = sr, plot=FALSE, norm = TRUE)
+    #  time_feats[i, 6] <- seewave::sh(env_chunk) # Temporal Shannon Entropy
+    #} else {
+    #  time_feats[i, 6] <- 0
+    #}
     
-  }
+  #}
   
   mfcc_df <- as.data.frame(all_mels[1:n_frames, ])
   mfcc_d1_df <- as.data.frame(delta_mels[1:n_frames, ])
@@ -281,18 +281,19 @@ calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
   final_df <- data.frame(
     window_index = 1:n_frames,
     start_time = (starts - 1) / sr,
-    end_time = (starts - 1 + window_samps) / sr,
-    rms_energy = time_feats[, 1],
-    zcr = time_feats[, 2],
-    spectral_slope = slopes,
-    spectral_flux = flux,
-    spec_dfv = dfv_vals,
-    f0_mean = time_feats[, 3],
-    f0_sd = time_feats[, 4],
-    crest_factor = time_feats[, 5],
-    temporal_entropy = time_feats[, 6]
+    end_time = (starts - 1 + window_samps) / sr#,
+    #rms_energy = time_feats[, 1],
+    #zcr = time_feats[, 2],
+    #spectral_slope = slopes,
+    #spectral_flux = flux,
+    #spec_dfv = dfv_vals,
+    #f0_mean = time_feats[, 3],
+    #f0_sd = time_feats[, 4],
+    #crest_factor = time_feats[, 5],
+    #temporal_entropy = time_feats[, 6]
   ) %>% 
-    cbind(dplyr::bind_rows(spec_props_list), mfcc_df, mfcc_d1_df, mfcc_d2_df) %>%
+    cbind(#dplyr::bind_rows(spec_props_list), 
+      mfcc_df, mfcc_d1_df, mfcc_d2_df) %>%
     dplyr::select(-any_of("prec"))
   
   return(final_df)
@@ -694,7 +695,7 @@ show_unavailable_message <- function(chunk) {
 }
 
 # Helper to handle completion
-check_completion <- function() {
+check_completion <- function(data_storage) {
   if (data_storage$current_run > length(data_storage$files_to_classify)) {
     shinyjs::hide("main_ui")
     shinyjs::hide("post_process_sidebar")
