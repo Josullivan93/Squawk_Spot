@@ -377,12 +377,17 @@ server <- function(input, output, session) {
   # Restart button
   observeEvent(input$restart_app, {
     shinyjs::hide("completion_ui")
+    shinyjs::hide("main_ui")
+    shinyjs::hide("post_process_sidebar")
     shinyjs::show("pre_process_sidebar")
     shinyjs::show("main_placeholder")
+    shinyjs::show("app_workspace")
+    shinyjs::reset("upload_file")
     # Reset data storage
     data_storage$features <- NULL
     data_storage$current_run <- 1
     data_storage$files_to_classify <- NULL
+    data_storage$runs_table <- NULL
   })
   
   # Audio Player UI

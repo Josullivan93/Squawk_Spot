@@ -696,9 +696,13 @@ show_unavailable_message <- function(chunk) {
 
 # Helper to handle completion
 check_completion <- function(data_storage) {
+  # 1. First, ensure there is actually data loaded
+  if (is.null(data_storage$files_to_classify) || length(data_storage$files_to_classify) == 0) {
+    return(FALSE)
+  }
+  
   if (data_storage$current_run > length(data_storage$files_to_classify)) {
-    shinyjs::hide("main_ui")
-    shinyjs::hide("post_process_sidebar")
+    shinyjs::hide("app_workspace")
     shinyjs::show("completion_ui") # We will add this to ui.R
     showNotification("Session Complete! All candidates reviewed.", type = "message")
     return(TRUE)
