@@ -15,7 +15,7 @@ options(shiny.maxRequestSize = 30*1024^2)
 squawk_model <- readRDS(here("models", "final_squawk_model.rds"))
 # Extract feature names
 features_used <- squawk_model$forest$independent.variable.names
-message(features_used)
+#message(features_used)
 # Server Definition
 server <- function(input, output, session) {
   
@@ -236,6 +236,7 @@ server <- function(input, output, session) {
   # File Processing and Chunking
   observeEvent(input$process_btn, {
     req(input$upload_file)
+    
     showModal(modalDialog(
       div(
         style = "text-align: center;",
@@ -251,7 +252,7 @@ server <- function(input, output, session) {
     
     # 
     
-    features_df <- extract_features(input$upload_file$datapath, p_cfg = list(
+    features_df <- extract_features(input$upload_file$name , input$upload_file$datapath, p_cfg = list(
       label           = "NonStat_PreEmph",
       noise_reduction = "ns",
       win_len         = 100, 
@@ -284,7 +285,19 @@ server <- function(input, output, session) {
       temp_dir       = temp_dir
     )
     
-    # 7. Update reactive storage
+    # 7.1 Check if anything was actually found
+    if (is.null(chunking_results$runs_table) || nrow(chunking_results$runs_table) == 0) {
+      removeModal()
+      showModal(modalDialog(
+        title = "No Candidates Found",
+        "The model did not detect any squawks in this file based on the current threshold (0.25).",
+        footer = modalButton("Try again"),
+        easyClose = TRUE
+      ))
+      return() # THIS IS CRITICAL: Stop the rest of the function from running
+    }
+    
+    # 7.2 Update reactive storage
     data_storage$features <- chunking_results$updated_features_df
     data_storage$runs_table <- chunking_results$runs_table
     data_storage$files_to_classify <- chunking_results$file_paths

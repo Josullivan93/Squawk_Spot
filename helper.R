@@ -300,10 +300,10 @@ calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
   
 }
 
-extract_features <- function(audio_path, p_cfg = list()) {
+extract_features <- function(original_path, audio_path, p_cfg = list()) {
   
   # 1. Pre-process (Noise Reduction)
-  message(paste0("Processing: ", tools::file_path_sans_ext(audio_path)))
+  message(paste0("Processing: ", basename(original_path)))
   # This returns a transient wave object or a temporary path to a cleaned file
   cleaned_wave <- preprocess_wav(audio_path,
                                  pre_emph_coeff = p_cfg$pre_emph_coeff,
@@ -329,7 +329,7 @@ extract_features <- function(audio_path, p_cfg = list()) {
   # We add the method options used here so it's baked into the dataframe
   features_df <- features_df %>%
     mutate(
-      file_id      = tools::file_path_sans_ext(basename(audio_path)),
+      file_id      = tools::file_path_sans_ext(basename(original_path)),
       proc_id      = p_cfg$label # Human-readable ID for the config
     )
   
@@ -357,6 +357,23 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
   
   # compute logical vector (avoid NSE scoping issues)
   is_pos <- features_df$auto_class == positive_class
+  
+  # Check for empty positive list
+  if (sum(is_pos) == 0) {
+    message("No candidates found in this file.")
+    
+    # Define an empty runs_dt structure so the return is consistent
+    empty_runs <- data.table(run_id = integer(0), start_time = numeric(0), 
+                             end_time = numeric(0), filepath = character(0))
+
+    fwrite(features_df, file.path(temp_dir, "features.csv"))
+    save(full_wave, file = file.path(temp_dir, "full_wave.RData"))
+    
+    return(list(updated_features_df = features_df,
+                file_paths = character(0),
+                run_metadata = list(),
+                runs_table = empty_runs))
+  }
   
   # identify run starts and assign run_id (only positive windows get run_id)
   run_start_vec <- is_pos & !c(FALSE, head(is_pos, -1))    # TRUE when a positive window follows a non-positive
@@ -396,6 +413,8 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
     
     # extend to target_length if shorter; do NOT cut long runs
     if ((ed - st) < target_length) ed <- st + target_length
+    # Ensure ed does not overrun file end
+    ed <- min(ed, dur)
     
     # buffer applies only to slice; it does NOT affect merging/detection logic
     slice_start <- max(0, st - buffer_time)
