@@ -51,10 +51,11 @@ server <- function(input, output, session) {
     req(run_idx > 0, run_idx <= length(data_storage$files_to_classify))
     
     chunk_path <- data_storage$files_to_classify[run_idx]
-    req(file.exists(here(chunk_path)))
+    actual_path <- if(file.exists(chunk_path)) chunk_path else here(chunk_path)
+    req(file.exists(actual_path))
     
     # Read WAV
-    chunk_wave <- readWave(here(chunk_path))
+    chunk_wave <- readWave(actual_path)
     req(seewave::duration(chunk_wave) > 0.001)
     duration <- seewave::duration(chunk_wave)
     
@@ -237,91 +238,132 @@ server <- function(input, output, session) {
   observeEvent(input$process_btn, {
     req(input$upload_file)
     
-    showModal(modalDialog(
-      div(
-        style = "text-align: center;",
+    shinyjs::show("loading_overlay")
+    on.exit(shinyjs::hide("loading_overlay"))
+    
+    files <- input$upload_file
+    all_feats <- list()
+    all_chunks <- list()
+    all_files <- list()
+    
+    withProgress(message = 'Processing...', value = 0, {
+      for (i in 1:nrow(files)) {
+        incProgress(1/nrow(files), detail = paste("Processing:", files$name[i]))
         
-        # Add the 'class' argument here
-        tags$img(src = "loader.gif", height = "140px", width = "140px", class = "circular-image"),
+        # 1. Load and calc features
         
-        p("Processing File...")
-      ),
-      footer = NULL,
-      easyClose = FALSE
-    ))
-    
-    # 
-    
-    features_df <- extract_features(input$upload_file$name , input$upload_file$datapath, p_cfg = list(
-      label           = "NonStat_PreEmph",
-      noise_reduction = "ns",
-      win_len         = 100, 
-      overlap         = 0.75,
-      pre_emph_coeff  = 0.97,
-      filter_type     = "None",
-      cutoff_highpass = NULL,
-      cutoff_lowpass  = NULL,
-      filter_order    = 4,
-      normalise       = TRUE
-    ))
-    
-    # 3. Predict probabilities using the loaded models
-    # We extract only the probability column for the target class
-    #prob_vocal  <- predict(model_vocal,  features_df)$predictions[, "vocalisation"]
-    prob_squawk <- predict(squawk_model, features_df)$predictions[, "1"]
-    features_df$prob_squawk <- prob_squawk
-    features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Squawk", "Background")
-    
-    # 4. Store the wave (Needed for the UI plots)
-    data_storage$full_wave_object <- readWave(input$upload_file$datapath)
-    
-    # 6. Group windows into 'Runs' and slice audio files
-    # This uses the 'is_candidate' column to decide what to extract
-    chunking_results <- group_and_slice_chunks(
-      features_df    = features_df,
-      full_wave      = data_storage$full_wave_object,
-      positive_class = "Squawk", # Tell the function to look at our candidate logic
-      buffer_time    = 1.0,           # 1 second before/after for context
-      temp_dir       = temp_dir
-    )
+        features_df <- extract_features(files$name[i] , files$datapath[i], p_cfg = list(
+          label           = "NonStat_PreEmph",
+          noise_reduction = "ns",
+          win_len         = 100, 
+          overlap         = 0.75,
+          pre_emph_coeff  = 0.97,
+          filter_type     = "None",
+          cutoff_highpass = NULL,
+          cutoff_lowpass  = NULL,
+          filter_order    = 4,
+          normalise       = TRUE
+        ))
+        
+        # 3. Predict probabilities using the loaded models
+        # We extract only the probability column for the target class
+        #prob_vocal  <- predict(model_vocal,  features_df)$predictions[, "vocalisation"]
+        prob_squawk <- predict(squawk_model, features_df)$predictions[, "1"]
+        features_df$prob_squawk <- prob_squawk
+        features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Squawk", "Background")
+        features_df$source_file <- files$name[i]
+        
+        # 4. Store the wave (Needed for the UI plots)
+        data_storage$full_wave_object <- readWave(files$datapath[i])
+        
+        chunking_results <- group_and_slice_chunks(
+          features_df    = features_df,
+          full_wave      = data_storage$full_wave_object,
+          positive_class = "Squawk", # Tell the function to look at our candidate logic
+          buffer_time    = 1.0,           # 1 second before/after for context
+          temp_dir       = temp_dir,
+          target_length  = 3.0,
+          original_path = files$name[i]
+        )
+        
+        chunking_results$runs_table[, filepath := file.path(temp_dir, basename(filepath))]
+
+        all_chunks[[i]] <- chunking_results$runs_table
+        all_feats[[i]] <- chunking_results$updated_features_df
+        all_files[[i]] <- chunking_results$file_paths
+      }
+      
+      combined_runs <- rbindlist(all_chunks, fill = TRUE)
     
     # 7.1 Check if anything was actually found
-    if (is.null(chunking_results$runs_table) || nrow(chunking_results$runs_table) == 0) {
+    if (is.null(combined_runs) || nrow(combined_runs) == 0) {
       removeModal()
       showModal(modalDialog(
         title = "No Candidates Found",
-        "The model did not detect any squawks in this file based on the current threshold (0.25).",
+        "The model did not detect any squawks in these files based on the current threshold (0.25).",
         footer = modalButton("Try again"),
         easyClose = TRUE
       ))
-      return() # THIS IS CRITICAL: Stop the rest of the function from running
+      return() # Stop the rest of the function from running
     }
     
     # 7.2 Update reactive storage
-    data_storage$features <- chunking_results$updated_features_df
-    data_storage$runs_table <- chunking_results$runs_table
-    data_storage$files_to_classify <- chunking_results$file_paths
+    data_storage$features <- rbindlist(all_feats, fill = TRUE)
+    # Combine everything into one master classification list
+    data_storage$runs_table <- combined_runs
+    data_storage$files_to_classify <- unlist(all_files)
     data_storage$current_run <- 1
+    
+    # Save state for resume
+    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
+            file.path(temp_dir, "app_state.rds"))
     
     removeModal()
     showNotification(paste0("Processing complete! Found ", nrow(chunking_results$runs_table), " candidates."), 
                      type = "message")
+    
+    shinyjs::hide("loading_overlay")
     shinyjs::hide(id = "pre_process_sidebar")
     shinyjs::show(id = "post_process_sidebar")
     shinyjs::hide(id = "main_placeholder")
     shinyjs::show(id = "main_ui")
+    })
   })
   
   # Resume previous session
   observeEvent(input$resume_btn, {
-    data_storage$features <- fread(file.path(temp_dir, "features.csv"))
-    if (file.exists(file.path(temp_dir, "runs.csv"))) {
-      data_storage$runs_table <- fread(file.path(temp_dir, "runs.csv"))
-      data_storage$files_to_classify <- data_storage$runs_table$filepath
-    } else {
-      data_storage$runs_table <- NULL
-      data_storage$files_to_classify <- list.files(temp_dir, pattern="\\.wav$", full.names=TRUE)
+    req(temp_dir)
+    
+    addResourcePath("temp_audio", temp_dir)
+      
+    feat_path <- file.path(temp_dir, "features.csv")
+    runs_path <- file.path(temp_dir, "runs.csv")
+    
+    # Check if the session files actually exist
+    if (!file.exists(feat_path) || !file.exists(runs_path)) {
+      showNotification("No active session found to resume.", type = "error")
+      return()
     }
+    
+    # 1. Load the remaining unclassified data
+    data_storage$features <- fread(feat_path)
+    data_storage$runs_table <- fread(runs_path)
+    
+    # 2. Update the file list for the audio player
+    # These paths point to the .wav clips already sitting in the tmp folder
+    data_storage$files_to_classify <- data_storage$runs_table$filepath
+    
+    # 3. Reset index to 1 (since finished runs were already removed from these files)
+    data_storage$current_run <- 1
+    
+    # 4. Flip the UI switches
+    shinyjs::hide("pre_process_sidebar")
+    shinyjs::hide("main_placeholder")
+    shinyjs::show("post_process_sidebar")
+    shinyjs::show("main_ui")
+    
+    removeModal()
+    showNotification(paste("Resumed session with", nrow(data_storage$runs_table), "remaining candidates."), type = "message")
   })
   
   # Navigation & Classification
@@ -337,6 +379,10 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    
+    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
+            file.path(temp_dir, "app_state.rds"))
+    
     check_completion(data_storage)
   })
   
@@ -350,6 +396,10 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    
+    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
+            file.path(temp_dir, "app_state.rds"))
+    
     check_completion(data_storage)
   })
   
@@ -363,6 +413,10 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    
+    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
+            file.path(temp_dir, "app_state.rds"))
+    
     check_completion(data_storage)
   })
   
@@ -376,6 +430,10 @@ server <- function(input, output, session) {
       output_dir = here("Output")
     )
     data_storage$current_run <- data_storage$current_run + 1
+    
+    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
+            file.path(temp_dir, "app_state.rds"))
+    
     check_completion(data_storage)
   })
   
@@ -383,9 +441,18 @@ server <- function(input, output, session) {
   
   observeEvent(input$btn_next, { 
     data_storage$current_run <- data_storage$current_run + 1 
+    
+    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
+            file.path(temp_dir, "app_state.rds"))
+    
     check_completion(data_storage)
     })
-  observeEvent(input$btn_prev, { data_storage$current_run <- max(1, data_storage$current_run - 1) })
+  
+  observeEvent(input$btn_prev, {
+    
+    data_storage$current_run <- max(1, data_storage$current_run - 1) 
+    
+    })
   
   # Restart button
   observeEvent(input$restart_app, {
@@ -442,6 +509,20 @@ server <- function(input, output, session) {
     req(current_run_idx <= total_runs) # Ensure run index is valid
     current_file_name <- basename(here(data_storage$files_to_classify[current_run_idx]))
     paste0("Run ", current_run_idx, " of ", total_runs, ": ", current_file_name)
+  })
+  
+  # Check for existing session on app launch
+  isolate({
+    if (file.exists(file.path(temp_dir, "runs.csv")) && nrow(fread(file.path(temp_dir, "runs.csv"))) > 0) {
+      showModal(modalDialog(
+        title = "Interrupted Session Detected",
+        "It looks like the last session wasn't finished. Would you like to resume classifying the remaining clips?",
+        footer = tagList(
+          actionButton("resume_btn", "Yes, Resume", class = "btn-success"),
+          modalButton("No, Start Fresh")
+        )
+      ))
+    }
   })
   
   session$onSessionEnded(function() { stopApp() })

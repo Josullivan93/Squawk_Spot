@@ -339,7 +339,7 @@ extract_features <- function(original_path, audio_path, p_cfg = list()) {
 # group_and_slice_chunks
 group_and_slice_chunks <- function(features_df, full_wave, positive_class,
                                    buffer_time = 1.0, temp_dir,
-                                   target_length = 3.0) {
+                                   target_length = 3.0, original_path) {
   # Ensure temp dir exists
   if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
   
@@ -428,8 +428,10 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
     clip <- full_wave@left[slice_start_ind:slice_end_ind]
     clip <- Wave(left = clip, samp.rate = full_wave@samp.rate, bit = full_wave@bit, pcm = full_wave@pcm)
     
-    out_name <- paste0("run_", sprintf("%04d", rid),
-                       "_", sprintf("%.2f-%.2f", slice_start, slice_end), ".wav")
+    out_name <- paste0(tools::file_path_sans_ext(basename(original_path)),
+                       "_run_", sprintf("%04d", rid), "_",
+                       sprintf("%.2f-%.2f",slice_start, slice_end),
+                       ".wav")
     out_path <- file.path(temp_dir, out_name)
     savewav(clip, filename = out_path) # Use seewave::savwav as implementation of writeWave with normalise step included
     clip_paths[i] <- out_path
@@ -475,6 +477,7 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
 # classify_and_move
 classify_and_move <- function(label, run_id, features_df = NULL,
                               temp_dir = NULL, output_dir = NULL) {
+  
   if (missing(label) || missing(run_id)) stop("label and run_id are required.")
   if (is.null(temp_dir) && is.null(features_df)) {
     stop("Either 'features_df' (in-memory) or 'temp_dir' must be provided (features.csv lives in temp_dir).")
@@ -534,18 +537,30 @@ classify_and_move <- function(label, run_id, features_df = NULL,
   if (!is.null(runs_dt) && "run_id" %in% names(runs_dt)) {
     runs_dt[, run_id := as.integer(run_id)]
     candidate <- runs_dt[run_id == run_id_int, filepath]
-    if (length(candidate) >= 1 && file.exists(candidate[1])) clip_path <- candidate[1]
+    if (length(candidate) >= 1 && file.exists(candidate[1])) clip_path <- normalizePath(candidate[1], winslash = "/", mustWork = FALSE)
   }
   if (is.null(clip_path)) {
     cand <- unique(rows_to_move$filepath)
     for (c in cand) {
-      if (file.exists(c)) { clip_path <- c; break }
+      if (file.exists(c)) { 
+        clip_path <- normalizePath(c, winslash = "/", mustWork = FALSE)
+        break 
+      }
       c2 <- file.path(temp_dir, basename(c))
-      if (file.exists(c2)) { clip_path <- c2; break }
+      if (file.exists(c2)) { 
+        clip_path <- normalizePath(c2, winslash = "/", mustWork = FALSE)
+        break
+      }
     }
   }
+  
   if (is.null(clip_path) || !file.exists(clip_path)) {
     stop("Could not resolve clip file for run_id=", run_id_int)
+  }
+  
+  if (startsWith(clip_path, output_dir)) {
+    message("File already classified. Skipping move.")
+    return(features_df)
   }
   
   # ensure output dirs exist
@@ -620,7 +635,10 @@ classify_run <- function(features_df, runs_table, current_run_idx, label, temp_d
   # Guard: check runs_table exists and run index is valid
   if (is.null(runs_table) || current_run_idx > nrow(runs_table)) return(features_df)
   
-  current_run_id <- runs_table$run_id[current_run_idx]
+  req_row <- runs_table[current_run_idx, ]
+  current_run_id <- req_row$run_id
+  current_file_id <- features_df[run_id == current_run_id, file_id][1]
+  
   if (length(current_run_id) == 0) return(features_df)
   
   # Call classify_and_move

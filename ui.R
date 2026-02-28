@@ -16,10 +16,21 @@ ui <- fluidPage(
       #progress_container { background-color: #eee; border-radius: 13px; padding: 3px; margin-bottom: 20px; }
       #progress_bar { background-color: #007bff; width: 0%; height: 20px; border-radius: 10px; transition: width 0.4s ease; }
       #completion_ui { margin-top: 100px; }
+      #audio_element { width: 100%; margin-top: 10px; }
+      .btn-classify:hover { filter: brightness(90%); transform: translateY(-1px); }
+      .well { border: 1px solid #ddd; }
+      #file_info { font-weight: bold; color: #555; font-size: 1.1em; }
     "))
   ),
   
   titlePanel("SquawkSpot: Automated Vocalization Classifier"),
+  
+  div(id = "loading_overlay",
+      style = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+             background: rgba(255, 255, 255, 0.8); z-index: 9999; text-align: center; padding-top: 200px;",
+      tags$img(src = "loader.gif", height = "150px"),
+      h3("Analyzing Audio...", style = "color: #333; margin-top: 20px;")
+  ),
   
   div(id="app_workspace",
       
@@ -28,7 +39,8 @@ ui <- fluidPage(
           # SECTION 1: Pre-Processing (Visible at start)
           div(id = "pre_process_sidebar",
               h4("Step 1: Upload Audio"),
-              fileInput("upload_file", "Choose WAV File", accept = c(".wav")),
+              fileInput("upload_file", "Choose WAV File", accept = c(".wav"), multiple = 
+                          TRUE),
               actionButton("process_btn", "Process & Detect", class = "btn-primary", width = "100%")
           ),
           
