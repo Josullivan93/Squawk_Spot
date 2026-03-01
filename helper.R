@@ -118,7 +118,6 @@ preprocess_wav <- function(path,                  # Full filepath of wav file
   # Apply Noise Reduction
   # Requires confirmation that python is loaded and ready
   if ( noise_reduction != "none"){
-    
     # Pass to python
     left_py <- r_to_py(wav_obj@left)
     sr_py <- r_to_py(wav_obj@samp.rate)
@@ -137,7 +136,6 @@ preprocess_wav <- function(path,                  # Full filepath of wav file
     }
     
   }
-  
   if (normalise == TRUE) {
     
     # Remove DC Offset (Center the wave at zero)
@@ -492,13 +490,13 @@ classify_and_move <- function(label, run_id, features_df = NULL,
   # default output_dir = parent of temp_dir or here("Output")
   if (is.null(output_dir)) {
     if (!is.null(temp_dir)) {
-      output_dir <- normalizePath(dirname(temp_dir))
+      output_dir <- normalizePath(dirname(temp_dir), winslash = "/", mustWork = FALSE)
     } else {
       output_dir <- here("Output")
     }
   } else {
-    if (!is.null(temp_dir) && normalizePath(output_dir) == normalizePath(temp_dir)) {
-      output_dir <- normalizePath(dirname(temp_dir))
+    if (!is.null(temp_dir) && normalizePath(output_dir, winslash = "/", mustWork = FALSE) == normalizePath(temp_dir, winslash = "/", mustWork = FALSE)) {
+      output_dir <- normalizePath(dirname(temp_dir), winslash = "/", mustWork = FALSE)
       message("classify_and_move: output_dir equals temp_dir → writing classification folders to ", output_dir)
     }
   }
@@ -558,7 +556,7 @@ classify_and_move <- function(label, run_id, features_df = NULL,
     stop("Could not resolve clip file for run_id=", run_id_int)
   }
   
-  if (startsWith(clip_path, output_dir)) {
+  if (startsWith(clip_path, output_dir) && !startsWith(clip_path, temp_dir)) {
     message("File already classified. Skipping move.")
     return(features_df)
   }
@@ -621,7 +619,8 @@ classify_and_move <- function(label, run_id, features_df = NULL,
   message(sprintf("run_id=%s labelled '%s' and clip moved to: %s", run_id_int, label, new_clip_path))
   
   # --- Automatic cleanup if last run ---
-  if (nrow(remaining) == 0) {
+  
+  if (nrow(remaining[!is.na(run_id)]) == 0) {
     ann_cleanup(temp_dir = temp_dir, output_dir = output_dir)
     message("All runs classified — tmp folder cleaned automatically.")
   }

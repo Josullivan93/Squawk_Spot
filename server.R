@@ -501,6 +501,16 @@ server <- function(input, output, session) {
   
   observeEvent(input$current_time, { playhead_time(input$current_time) })
   
+  output$debug_state <- renderPrint({
+    list(
+      current_run_idx = data_storage$current_run,
+      total_runs_in_table = if(!is.null(data_storage$runs_table)) nrow(data_storage$runs_table) else 0,
+      files_to_classify_count = length(data_storage$files_to_classify),
+      active_temp_files = list.files(temp_dir)
+    )
+  })
+  
+  
   # File info + progress
   output$file_info <- renderText({
     req(data_storage$files_to_classify, data_storage$current_run)

@@ -73,7 +73,11 @@ ui <- fluidPage(
                 
                 # Toggle highlight off
                 checkboxInput("show_highlight", "Show/Hide Squawk Highlight", value = TRUE),
-                br()
+                br(),
+                
+                hr(),
+                h4("System Audit"),
+                verbatimTextOutput("debug_state")
             )
           )
         ),
