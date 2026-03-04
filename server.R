@@ -429,6 +429,21 @@ server <- function(input, output, session) {
 
     check_completion(data_storage, temp_dir, output_dir)
   })
+  
+  observeEvent(list(input$btn_alarm, input$hotkey_2), {
+    req(data_storage$current_run <= length(data_storage$files_to_classify))
+    
+    data_storage$features <- classify_run(
+      features_df = data_storage$features,
+      runs_table = data_storage$runs_table,
+      current_run_idx = data_storage$current_run,
+      label = "Alarm",
+      temp_dir = temp_dir,
+      output_dir = here("Output")
+    )
+    data_storage$current_run <- data_storage$current_run + 1
+    check_completion(data_storage)
+  })
 
   observeEvent(list(input$btn_other, input$hotkey_2), {
     data_storage$features <- classify_run(

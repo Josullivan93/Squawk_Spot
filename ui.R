@@ -60,10 +60,12 @@ ui <- fluidPage(
             hr(),
 
             # Classification Buttons
-            actionButton("btn_squawk", "1: Squawk (Positive)", class = "btn-success btn-classify"),
-            actionButton("btn_other", "2: Other Vocalisation", class = "btn-info btn-classify"),
-            actionButton("btn_noise", "3: Noise / Background", class = "btn-warning btn-classify"),
-            actionButton("btn_unknown", "4: Unknown / Unsure", class = "btn-secondary btn-classify"),
+            actionButton("btn_squawk", "1: Squawk", class = "btn-success btn-classify"),
+            actionButton("btn_alarm", "2: Alarm Call", class = "btn-info btn-classify"),
+            actionButton("btn_other", "3: Other Vocalisation", class = "btn-warning btn-classify"),
+            actionButton("btn_noise", "4: Noise / Background", class = "btn-danger btn-classify"),
+            actionButton("btn_unknown", "5: Unknown / Unsure", class = "btn-secondary btn-classify"),
+            
             hr(),
             h4("Navigation"),
             splitLayout(
@@ -71,7 +73,7 @@ ui <- fluidPage(
               actionButton("btn_next", "Skip/Next")
             ),
             br(),
-            p(tags$small("Hotkeys: 1, 2, 3, 4 for classification")),
+            p(tags$small("Hotkeys: 1, 2, 3, 4, or 5 for classification")),
             h4("Plotting Options"),
 
             # Toggle highlight off
@@ -116,6 +118,7 @@ ui <- fluidPage(
               if(e.which == 50) inputId = 'hotkey_2'; // Key 2
               if(e.which == 51) inputId = 'hotkey_3'; // Key 3
               if(e.which == 52) inputId = 'hotkey_4'; // Key 4
+              if(e.which == 53) inputId = 'hotkey_5'; // Key 5
 
               if(inputId !== '') {
                 // We send a timestamp/random value to ensure Shiny
