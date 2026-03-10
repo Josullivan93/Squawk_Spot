@@ -195,7 +195,7 @@ server <- function(input, output, session) {
       )
     }
 
-    plot_ly(z = amp_db, x = chunk$spec_data$time, y = chunk$spec_data$freq, type = "heatmap", colors = "viridis", hoverinfo = "x+y+z", showscale = FALSE) |>
+    plot_ly(z = amp_db, x = chunk$spec_data$time, y = chunk$spec_data$freq, type = "heatmap", colors = "inferno", hoverinfo = "x+y+z", showscale = FALSE) |>
       layout(
         xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
         yaxis = list(ange = c(0, 13), title = "Frequency (kHz)"),
