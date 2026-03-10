@@ -1,13 +1,4 @@
 # server.R: Contains the core logic of the Shiny application.
-
-if (!require("pacman")) {
-  install.packages("pacman")
-  library(pacman)
-}
-
-p_load(here, shiny, dplyr, data.table, seewave, tuneR, shinyjs, plotly, ranger)
-source(here("helper.R"))
-
 options(shiny.maxRequestSize = 30 * 1024^2)
 
 # Path to your final trained models
@@ -18,6 +9,46 @@ features_used <- squawk_model$forest$independent.variable.names
 # message(features_used)
 # Server Definition
 server <- function(input, output, session) {
+  
+  observe({
+    withProgress(message = 'System Startup', value = 0, {
+      
+      # Step 1: Load R Libraries
+      incProgress(0.4, detail = "Loading Bioacoustic Toolkits...")
+      pacman::p_load(here, plotly, dplyr, tidyverse, tuneR, seewave, reticulate, data.table, ranger,
+                     future.apply, matrixStats, progress, signal)
+      
+      # Step 2: Initialize Python
+      incProgress(0.4, detail = "Starting Python Noise Reduction Engine...")
+      # 1. Python Environment Setup ----
+      # This runs once when source(helper.R) is called by server.R
+      tryCatch(
+        {
+          if (!reticulate::virtualenv_exists("r-reticulate")) {
+            reticulate::virtualenv_create("r-reticulate", packages = c("numpy", "scipy", "noisereduce"))
+          }
+          reticulate::use_virtualenv("r-reticulate", required = TRUE)
+          nr <<- import("noisereduce", convert = FALSE)
+          cat("Python (noisereduce) loaded successfully.\n")
+        },
+        error = function(e) {
+          warning("Python setup failed. Noise reduction will be unavailable. Error: ", e$message)
+        }
+      )
+      
+      # Step 3: Finalize
+      incProgress(0.2, detail = "Opening Workspace...")
+      Sys.sleep(0.5) # Brief pause so the user can see it's finished
+      
+      # HIDE loading screen, SHOW app
+      shinyjs::hide("loading_page")
+      shinyjs::show("app_workspace")
+      
+      showNotification("Engine Ready", type = "message", duration = 3)
+    })
+  },  priority = 10)
+  
+  
   # reactiveValues object for storing data
   data_storage <- reactiveValues(
     features = NULL,

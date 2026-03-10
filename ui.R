@@ -1,12 +1,16 @@
 # UI Definition
-if (!require("pacman")) {
-  install.packages("pacman")
-  library(pacman)
-}
-p_load(here, shiny, shinyjs, plotly)
-
 ui <- fluidPage(
   useShinyjs(), # Required for toggling UI sections
+  
+  # A loading screen that covers everything
+  div(id = "loading_page", 
+      style = "position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+               background: white; z-index: 10000; display: flex; 
+               flex-direction: column; justify-content: center; align-items: center;",
+      h2("Squawk Spot", style="color: #007bff; font-weight: bold;"),
+      p("Initializing R packages and Python environment...", style="color: #666;"),
+      tags$img(src = "loader.gif", class = "rounded-circle", height = "150px")
+  ),
 
   tags$head(
     tags$style(HTML("
@@ -33,7 +37,8 @@ ui <- fluidPage(
     ),
     h3("Analyzing Audio...", style = "color: #333; margin-top: 20px;")
   ),
-  div(
+  shinyjs::hidden(
+    div(
     id = "app_workspace",
     sidebarLayout(
       sidebarPanel(
@@ -132,6 +137,7 @@ ui <- fluidPage(
         )
       )
     )
+  )
   ),
   shinyjs::hidden(
     div(

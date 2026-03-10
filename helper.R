@@ -1,29 +1,3 @@
-if (!require("pacman")) {
-  install.packages("pacman")
-  library(pacman)
-}
-p_load(
-  future.apply, tidyverse, matrixStats, seewave, tuneR,
-  reticulate, here, progress, signal, data.table
-)
-
-# 1. Python Environment Setup ----
-# This runs once when source(helper.R) is called by server.R
-cat("Setting up Python environment...\n")
-tryCatch(
-  {
-    if (!reticulate::virtualenv_exists("r-reticulate")) {
-      reticulate::virtualenv_create("r-reticulate", packages = c("numpy", "scipy", "noisereduce"))
-    }
-    reticulate::use_virtualenv("r-reticulate", required = TRUE)
-    nr <- import("noisereduce", convert = FALSE)
-    cat("Python (noisereduce) loaded successfully.\n")
-  },
-  error = function(e) {
-    warning("Python setup failed. Noise reduction will be unavailable. Error: ", e$message)
-  }
-)
-
 # Helper Functions
 
 # Noise Reduction
