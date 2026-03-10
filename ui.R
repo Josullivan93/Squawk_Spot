@@ -8,8 +8,12 @@ ui <- fluidPage(
                background: white; z-index: 10000; display: flex; 
                flex-direction: column; justify-content: center; align-items: center;",
       h2("Squawk Spot", style="color: #007bff; font-weight: bold;"),
-      p("Initializing R packages and Python environment...", style="color: #666;"),
-      tags$img(src = "loader.gif", class = "rounded-circle", height = "150px")
+      div(class = "circular-loader-container",
+          div(class = "loader-circle",
+              tags$img(src = "loader.gif")
+          )
+      ),
+      p("Initializing R packages and Python environment...", style="color: #666;")
   ),
 
   tags$head(
@@ -24,18 +28,49 @@ ui <- fluidPage(
       .btn-classify:hover { filter: brightness(90%); transform: translateY(-1px); }
       .well { border: 1px solid #ddd; }
       #file_info { font-weight: bold; color: #555; font-size: 1.1em; }
+      .circular-loader-container {
+          display: flex;
+          justify-content: center;  /* Horizontal center */
+          align-items: center;      /* Vertical center */
+          width: 100%;              /* Take up full width of the parent (e.g. sidebar) */
+          margin: 20px 0;           /* Add some breathing room top/bottom */
+      }
+      
+      /* Use this class for the CROPPING box */
+      .loader-circle {
+          width: 150px;
+          height: 150px;
+          overflow: hidden;
+          border-radius: 50%;
+          border: 3px solid #007bff;
+          box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+          display: flex;
+          justify-content: center;
+          align-items: center;
+      }
+      
+      /* Use this to make the GIF fit perfectly inside */
+      .loader-circle img {
+          height: 100%;
+          width: 100%;
+          object-fit: cover; /* This is the secret for the perfect crop */
+      }
     "))
   ),
   titlePanel("SquawkSpot: Automated Vocalization Classifier"),
   div(
     id = "loading_overlay",
     style = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-             background: rgba(255, 255, 255, 0.8); z-index: 9999; text-align: center; padding-top: 200px;",
-    tags$img(
-      src = "loader.gif",
-      class = "rounded-circle", height = "150px"
+           background: rgba(255, 255, 255, 0.8); z-index: 9999; padding-top: 200px;",
+    
+    # THE REUSABLE CENTERED LOADER
+    div(class = "circular-loader-container",
+        div(class = "loader-circle",
+            tags$img(src = "loader.gif")
+        )
     ),
-    h3("Analyzing Audio...", style = "color: #333; margin-top: 20px;")
+    
+    h3("Analyzing Audio...", style = "color: #333; text-align: center; margin-top: 20px;")
   ),
   shinyjs::hidden(
     div(
