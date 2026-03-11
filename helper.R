@@ -737,7 +737,7 @@ check_completion <- function(data_storage, temp_dir, output_dir) {
     message("All runs classified — tmp folder cleaned automatically.")
 
     shinyjs::hide("app_workspace")
-    shinyjs::show("completion_ui") # We will add this to ui.R
+    shinyjs::show("completion_ui")
     showNotification("Session Complete! All candidates reviewed.", type = "message")
     return(TRUE)
   }

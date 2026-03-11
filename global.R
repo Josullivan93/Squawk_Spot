@@ -4,7 +4,7 @@ if (!require("pacman")) {
   library(pacman)
 }
 
-p_load( shiny, shinyjs, here, plotly)
+p_load( shiny, shinyjs, here, plotly, zip)
 
 # Load your helper functions (Logic only, no heavy data yet)
 source("helper.R")

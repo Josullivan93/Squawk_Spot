@@ -562,6 +562,56 @@ server <- function(input, output, session) {
     data_storage$files_to_classify <- NULL
     data_storage$runs_table <- NULL
   })
+  
+  # Zip and end button
+  observeEvent(input$btn_prep_zip, {
+    showModal(modalDialog(
+      title = "Finalize & Archive Session",
+      footer = tagList(
+        modalButton("Cancel"),
+        actionButton("btn_final_zip", "Confirm & Zip", class = "btn-success")
+      ),
+      p("Please enter your initials or an identifier. This will be added as a prefix to your output ZIP file."),
+      textInput("user_id", "Identifier:", placeholder = "e.g., JO"),
+      helpText("The app will close automatically after the ZIP is created.")
+    ))
+  })
+  
+  # 2. The actual zipping logic (triggered from inside the Modal)
+  observeEvent(input$btn_final_zip, {
+    req(input$user_id)
+    
+    user_prefix <- trimws(input$user_id)
+    if (user_prefix == "") {
+      showNotification("Identifier cannot be empty.", type = "error")
+      return()
+    }
+    
+    # Remove the modal so it doesn't hang
+    removeModal()
+    
+    # Sanitize filename and create timestamp
+    safe_prefix <- gsub("[^[:alnum:]]", "_", user_prefix)
+    timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
+    zip_filename <- paste0(safe_prefix, "_SquawkSpot_", timestamp, ".zip")
+    
+    withProgress(message = 'Creating Archive...', value = 0.5, {
+      tryCatch({
+        # Zip the Output folder
+        zip::zipr(zipfile = zip_filename, 
+                  files = here("Output"))
+        
+        showNotification(paste("Success! Created:", zip_filename), type = "message")
+        
+        # Wait and Close
+        Sys.sleep(2)
+        stopApp()
+        
+      }, error = function(e) {
+        showNotification(paste("Zipping failed:", e$message), type = "error")
+      })
+    })
+  })
 
   # Audio Player UI
   output$audio_player <- renderUI({

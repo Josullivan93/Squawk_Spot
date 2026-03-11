@@ -185,7 +185,13 @@ ui <- fluidPage(
             h2("Session Complete!", style = "color: #28a745;"),
             p("You have reviewed all detected candidates for this file."),
             hr(),
-            actionButton("restart_app", "Process New File", class = "btn-primary btn-lg")
+            actionButton("restart_app", "Process New File", class = "btn-primary btn-lg", 
+                         icon = icon("sync")),
+            tags$span(style = "margin: 0 20px;", "OR"),
+            
+            actionButton("btn_prep_zip", "Zip Output & Close App", 
+                         class = "btn-secondary btn-lg", 
+                         icon = icon("file-archive"))
           )
         )
       )
