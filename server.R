@@ -216,7 +216,7 @@ server <- function(input, output, session) {
     if (input$show_highlight && !is.null(chunk$highlight)) {
       shapes_base[[1]] <- list(
         type = "rect", x0 = chunk$highlight$start, x1 = chunk$highlight$end,
-        y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(227, 79, 38, 0.3)", line = list(width = 0.5, color = "rgba(227, 79, 38, 1)")
+        y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(0, 255, 255, 0.5)", line = list(width = 0.5, color = "rgba(0, 255, 255, 1)")
       )
     }
 
