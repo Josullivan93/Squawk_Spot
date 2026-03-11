@@ -570,27 +570,32 @@ classify_and_move <- function(label, run_id, features_df = NULL,
   # Assign label ONLY to this run’s rows
   rows_to_move[, user_class := label]
   rows_to_move[, filepath := new_clip_path]
+  
+  # Dont write if skipped
+  is_skip <- (label == "Skipped")
+  
+  if(!is_skip){
+    # Append these rows to master_features.csv
+    master_csv <- file.path(output_dir, "master_features.csv")
+    if (file.exists(master_csv)) {
+      master_df <- fread(master_csv)
+      master_df <- rbind(master_df, rows_to_move, fill = TRUE)
+      fwrite(master_df, master_csv)
+    } else {
+      fwrite(rows_to_move, master_csv)
+    }
 
-  # Append these rows to master_features.csv
-  master_csv <- file.path(output_dir, "master_features.csv")
-  if (file.exists(master_csv)) {
-    master_df <- fread(master_csv)
-    master_df <- rbind(master_df, rows_to_move, fill = TRUE)
-    fwrite(master_df, master_csv)
-  } else {
-    fwrite(rows_to_move, master_csv)
+    # Append to label-specific CSV
+    label_csv <- file.path(label_dir, paste0(gsub(" ", "_", label), ".csv"))
+    if (file.exists(label_csv)) {
+      lab_df <- fread(label_csv)
+      lab_df <- rbind(lab_df, rows_to_move, fill = TRUE)
+      fwrite(lab_df, label_csv)
+    } else {
+      fwrite(rows_to_move, label_csv)
+    }
   }
-
-  # Append to label-specific CSV
-  label_csv <- file.path(label_dir, paste0(gsub(" ", "_", label), ".csv"))
-  if (file.exists(label_csv)) {
-    lab_df <- fread(label_csv)
-    lab_df <- rbind(lab_df, rows_to_move, fill = TRUE)
-    fwrite(lab_df, label_csv)
-  } else {
-    fwrite(rows_to_move, label_csv)
-  }
-
+  
   # Remove only this run from features_df and save back to tmp
   remaining <- features_df[run_id != run_id_int | is.na(run_id), ]
   fwrite(remaining, feat_path)
@@ -604,7 +609,14 @@ classify_and_move <- function(label, run_id, features_df = NULL,
 
   message(sprintf("run_id=%s labelled '%s' and clip moved to: %s", run_id_int, label, new_clip_path))
 
-  invisible(remaining)
+  # Return a receipt of action taken
+  return(list(
+    remaining_features = remaining,
+    moved_features = rows_to_move,
+    old_path = clip_path,
+    new_path = new_clip_path
+  ))
+  
 }
 
 # Classification button
@@ -730,4 +742,45 @@ check_completion <- function(data_storage, temp_dir, output_dir) {
     return(TRUE)
   }
   return(FALSE)
+}
+
+# Function to handle annotation logic
+handle_classification <- function(data_storage, label_name, temp_dir, output_dir) {
+  
+  if (data_storage$current_run > length(data_storage$files_to_classify)) {
+    return(NULL) # Prevent out-of-bounds errors
+  }
+  
+  # Run the classification (which now returns history)
+  res <- classify_run(
+    features_df = data_storage$features,
+    runs_table = data_storage$runs_table,
+    current_run_idx = data_storage$current_run,
+    label = label_name,
+    temp_dir = temp_dir,
+    output_dir = here("Output")
+  )
+  
+  # Update memory
+  data_storage$features <- res$remaining_features
+  
+  # Push the receipt onto the history stack
+  action_record <- list(
+    run_id = data_storage$runs_table$run_id[data_storage$current_run],
+    label = label_name,
+    old_path = res$old_path,
+    new_path = res$new_path,
+    moved_features = res$moved_features
+  )
+  data_storage$history <- c(list(action_record), data_storage$history)
+  
+  # Advance the UI
+  data_storage$current_run <- data_storage$current_run + 1
+  
+  saveRDS(
+    list(runs = data_storage$runs_table, feats = data_storage$features),
+    file.path(temp_dir, "app_state.rds")
+  )
+  
+  return(TRUE)
 }

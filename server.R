@@ -48,6 +48,14 @@ server <- function(input, output, session) {
     })
   },  priority = 10)
   
+  observe({
+    # Disable 'Previous' if we are at the very first run
+    if (is.null(data_storage$current_run) || data_storage$current_run <= 1) {
+      shinyjs::disable("btn_prev")
+    } else {
+      shinyjs::enable("btn_prev")
+    }
+  })
   
   # reactiveValues object for storing data
   data_storage <- reactiveValues(
@@ -55,7 +63,8 @@ server <- function(input, output, session) {
     current_run = 1,
     files_to_classify = NULL,
     full_wave_object = NULL,
-    runs_table = NULL
+    runs_table = NULL,
+    history = list()
   )
 
   # Reactive value for the playhead time
@@ -440,112 +449,92 @@ server <- function(input, output, session) {
     showNotification(paste("Resumed session with", nrow(data_storage$runs_table), "remaining candidates."), type = "message")
   })
 
-  observeEvent(list(input$btn_squawk, input$hotkey_1), {
-    req(data_storage$current_run <= length(data_storage$files_to_classify))
-
-    data_storage$features <- classify_run(
-      features_df = data_storage$features,
-      runs_table = data_storage$runs_table,
-      current_run_idx = data_storage$current_run,
-      label = "Squawk",
-      temp_dir = temp_dir,
-      output_dir = here("Output")
-    )
-    data_storage$current_run <- data_storage$current_run + 1
-
-    saveRDS(
-      list(runs = data_storage$runs_table, feats = data_storage$features),
-      file.path(temp_dir, "app_state.rds")
-    )
-
-    check_completion(data_storage, temp_dir, output_dir)
+  observeEvent(list(input$btn_squawk, input$hotkey_1), { 
+    handle_classification(data_storage, "Squawk", temp_dir, here("Output"))
+    check_completion(data_storage, temp_dir, here("Output"))
+  })
+  observeEvent(list(input$btn_alarm, input$hotkey_2), { 
+    handle_classification(data_storage, "Alarm Call", temp_dir, here("Output"))
+    check_completion(data_storage, temp_dir, here("Output"))
+  })
+  observeEvent(list(input$btn_noise, input$hotkey_3), { 
+    handle_classification(data_storage, "Noise", temp_dir, here("Output"))
+    check_completion(data_storage, temp_dir, here("Output"))
+  })
+  observeEvent(list(input$btn_unknown, input$hotkey_4), { 
+    handle_classification(data_storage, "Unknown", temp_dir, here("Output"))
+    check_completion(data_storage, temp_dir, here("Output"))
+  })
+  observeEvent(list(input$btn_other, input$hotkey_5), { 
+    handle_classification(data_storage, "Other Vocalisation", temp_dir, here("Output"))
+    check_completion(data_storage, temp_dir, here("Output"))
   })
   
-  observeEvent(list(input$btn_alarm, input$hotkey_2), {
-    req(data_storage$current_run <= length(data_storage$files_to_classify))
-    
-    data_storage$features <- classify_run(
-      features_df = data_storage$features,
-      runs_table = data_storage$runs_table,
-      current_run_idx = data_storage$current_run,
-      label = "Alarm",
-      temp_dir = temp_dir,
-      output_dir = here("Output")
-    )
-    data_storage$current_run <- data_storage$current_run + 1
-    check_completion(data_storage)
-  })
-
-  observeEvent(list(input$btn_other, input$hotkey_2), {
-    data_storage$features <- classify_run(
-      features_df = data_storage$features,
-      runs_table = data_storage$runs_table,
-      current_run_idx = data_storage$current_run,
-      label = "Other Vocalisations",
-      temp_dir = temp_dir,
-      output_dir = here("Output")
-    )
-    data_storage$current_run <- data_storage$current_run + 1
-
-    saveRDS(
-      list(runs = data_storage$runs_table, feats = data_storage$features),
-      file.path(temp_dir, "app_state.rds")
-    )
-
-    check_completion(data_storage, temp_dir, output_dir)
-  })
-
-  observeEvent(list(input$btn_unknown, input$hotkey_4), {
-    data_storage$features <- classify_run(
-      features_df = data_storage$features,
-      runs_table = data_storage$runs_table,
-      current_run_idx = data_storage$current_run,
-      label = "Unknown",
-      temp_dir = temp_dir,
-      output_dir = here("Output")
-    )
-    data_storage$current_run <- data_storage$current_run + 1
-
-    saveRDS(
-      list(runs = data_storage$runs_table, feats = data_storage$features),
-      file.path(temp_dir, "app_state.rds")
-    )
-
-    check_completion(data_storage, temp_dir, output_dir)
-  })
-
-  observeEvent(list(input$btn_noise, input$hotkey_3), {
-    data_storage$features <- classify_run(
-      features_df = data_storage$features,
-      runs_table = data_storage$runs_table,
-      current_run_idx = data_storage$current_run,
-      label = "Noise",
-      temp_dir = temp_dir,
-      output_dir = here("Output")
-    )
-    data_storage$current_run <- data_storage$current_run + 1
-
-    saveRDS(
-      list(runs = data_storage$runs_table, feats = data_storage$features),
-      file.path(temp_dir, "app_state.rds")
-    )
-
-    check_completion(data_storage, temp_dir, output_dir)
-  })
-
-  observeEvent(input$btn_next, {
-    data_storage$current_run <- data_storage$current_run + 1
-
-    saveRDS(
-      list(runs = data_storage$runs_table, feats = data_storage$features),
-      file.path(temp_dir, "app_state.rds")
-    )
-
-    check_completion(data_storage, temp_dir, output_dir)
-  })
+  observeEvent(input$btn_next, { 
+    handle_classification(data_storage, "Skipped", temp_dir, here("Output"))
+    check_completion(data_storage, temp_dir, here("Output")) 
+    })
 
   observeEvent(input$btn_prev, {
+    req(length(data_storage$history) > 0)
+    
+    # 1. Pop the last action off the stack
+    last_action <- data_storage$history[[1]]
+    data_storage$history <- data_storage$history[-1] 
+    
+    # 2. Physically move the file back to the 'tmp' folder
+    if (file.exists(last_action$new_path)) {
+      file.rename(last_action$new_path, last_action$old_path)
+    }
+    
+    # 3. Clean up the Output CSVs (if it wasn't a skip)
+    if (last_action$label != "Skipped") {
+      # Remove from Master
+      master_csv <- here("Output", "master_features.csv")
+      if (file.exists(master_csv)) {
+        m_df <- fread(master_csv)
+        m_df <- m_df[run_id != last_action$run_id] # Purge the bad run
+        fwrite(m_df, master_csv)
+      }
+      # Remove from Label Specific CSV
+      label_csv <- here("Output", gsub(" ", "_", last_action$label), paste0(gsub(" ", "_", last_action$label), ".csv"))
+      if (file.exists(label_csv)) {
+        l_df <- fread(label_csv)
+        l_df <- l_df[run_id != last_action$run_id]
+        fwrite(l_df, label_csv)
+      }
+    }
+    
+    # 4. Reconstruct the features (Undo the label and filepath overwrites)
+    restored_features <- copy(last_action$moved_features)
+    restored_features[, user_class := NA] 
+    restored_features[, filepath := last_action$old_path]
+    
+    # 5. Restore data to memory and disk in 'tmp'
+    data_storage$features <- rbind(data_storage$features, restored_features, fill = TRUE)
+    
+    feat_path <- file.path(temp_dir, "features.csv")
+    if (file.exists(feat_path)) {
+      fwrite(rbind(fread(feat_path), restored_features, fill = TRUE), feat_path)
+    }
+    
+    # Restore the runs.csv row (We can grab this right from memory!)
+    runs_path <- file.path(temp_dir, "runs.csv")
+    run_row <- data_storage$runs_table[run_id == last_action$run_id]
+    if (file.exists(runs_path)) {
+      fwrite(rbind(fread(runs_path), run_row, fill = TRUE), runs_path)
+    }
+    
+    # 6. Decrement the UI
     data_storage$current_run <- max(1, data_storage$current_run - 1)
+    
+    # Save State
+    saveRDS(
+      list(runs = data_storage$runs_table, feats = data_storage$features),
+      file.path(temp_dir, "app_state.rds")
+    )
+    
+    showNotification(paste("Undid classification for Run", last_action$run_id), type = "warning")
   })
 
   # Restart button
