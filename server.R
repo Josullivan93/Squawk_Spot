@@ -57,6 +57,22 @@ server <- function(input, output, session) {
     }
   })
   
+  # Handle restricting button press until audio plays
+  classification_btns <- c("btn_squawk", "btn_alarm", "btn_other", "btn_noise", "btn_unknown", "btn_next")
+  #restrict
+  observeEvent(data_storage$current_run, {
+    for (btn in classification_btns) {
+      shinyjs::disable(btn)
+    }
+  })
+  #enable
+  observeEvent(input$audio_finished, {
+    for (btn in classification_btns) {
+      shinyjs::enable(btn)
+    }
+    showNotification("Audio reviewed. Buttons enabled.", type = "message", duration = 2)
+  })
+  
   # reactiveValues object for storing data
   data_storage <- reactiveValues(
     features = NULL,
@@ -207,7 +223,7 @@ server <- function(input, output, session) {
     plot_ly(z = amp_db, x = chunk$spec_data$time, y = chunk$spec_data$freq, type = "heatmap", colors = "inferno", hoverinfo = "x+y+z", showscale = FALSE) |>
       layout(
         xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
-        yaxis = list(ange = c(0, 13), title = "Frequency (kHz)"),
+        yaxis = list(range = c(0, 13), title = "Frequency (kHz)"),
         shapes = shapes_base
       )
   })
@@ -246,12 +262,6 @@ server <- function(input, output, session) {
       "document.getElementById('progress_bar').style.width = '", progress, "%';"
     ))
   })
-
-  # Temp directory & resource path
-  temp_dir <- here("Output", "tmp")
-  output_dir <- here("Output")
-  if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
-  addResourcePath("temp_audio", temp_dir)
 
   # UI Update Logic
   observeEvent(input$upload_file, {
@@ -576,7 +586,10 @@ server <- function(input, output, session) {
         audio_player.addEventListener('play', startTimer);
         audio_player.addEventListener('playing', startTimer);
         audio_player.addEventListener('pause', stopTimer);
-        audio_player.addEventListener('ended', stopTimer);
+        audio_player.addEventListener('ended', () => {
+        stopTimer();
+        Shiny.setInputValue('audio_finished', Math.random(), {priority: 'event'});
+        });
       }
     "))
     tagList(audio_tag, js_script)
