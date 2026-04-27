@@ -24,6 +24,6 @@ if not defined R_BIN (
 :: 4. Run the app with renv activation
 :: We source renv/activate.R before running the app to lock in the correct libraries
 :: We run renv::status to confirm renv is correct and correct with restore if needed
-%R_BIN% --quiet --no-save -e "source('renv/activate.R'); if(!renv::status()$synchronized) { renv::restore(prompt=FALSE) }; shiny::runApp(getwd(), launch.browser = TRUE)"
+%R_BIN% --quiet --no-save -e "source('renv/activate.R'); if(isFALSE(renv::status()$synchronized)) { message('--- Updating Library ---'); renv::restore(prompt=FALSE) }; shiny::runApp(getwd(), launch.browser = TRUE)"
 
-pause >nul
+if %ERRORLEVEL% NEQ 0 pause
