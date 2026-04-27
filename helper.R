@@ -374,6 +374,10 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
   # Ensure data.table
   if (!is.data.table(features_df)) features_df <- as.data.table(copy(features_df))
 
+  if ("user_class" %in% names(features_df)) {
+    features_df[, user_class := as.character(user_class)]
+  }
+  
   # Require auto_class column
   if (!"auto_class" %in% names(features_df)) {
     stop("features_df must contain a column named 'auto_class'")
