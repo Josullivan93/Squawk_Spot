@@ -3,7 +3,7 @@ options(shiny.maxRequestSize = 30 * 1024^2)
 
 # Path to your final trained models
 # path_vocal_model <- here("models", "final_vocal_model.rds")
-squawk_model <- readRDS(here("models", "final_squawk_model.rds"))
+squawk_model <- readRDS(here("models", "final_vocalisation_model.rds"))
 # Extract feature names
 features_used <- squawk_model$forest$independent.variable.names
 # message(features_used)
@@ -337,8 +337,8 @@ server <- function(input, output, session) {
         # 1. Load and calc features
 
         features_df <- extract_features(files$name[i], files$datapath[i], p_cfg = list(
-          label           = "NonStat_PreEmph",
-          noise_reduction = "ns",
+          label           = "None_PreEmph",
+          noise_reduction = "None",
           win_len         = 100,
           overlap         = 0.75,
           pre_emph_coeff  = 0.97,
@@ -351,7 +351,7 @@ server <- function(input, output, session) {
         
         prob_squawk <- predict(squawk_model, features_df)$predictions[, "1"]
         features_df$prob_squawk <- prob_squawk
-        features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Squawk", "Background")
+        features_df$auto_class <- ifelse(features_df$prob_squawk > 0.1, "Squawk", "Background")
         features_df$source_file <- files$name[i]
 
         data_storage$full_wave_object <- readWave(files$datapath[i])
@@ -386,7 +386,7 @@ server <- function(input, output, session) {
         removeModal()
         showModal(modalDialog(
           title = "No Candidates Found",
-          "The model did not detect any squawks in these files based on the current threshold (0.25).",
+          "The model did not detect any squawks in these files based on the current threshold (0.1).",
           footer = modalButton("Try again"),
           easyClose = TRUE
         ))

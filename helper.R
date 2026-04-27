@@ -163,7 +163,7 @@ calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
     plot = FALSE, norm = FALSE, dB = NULL
   )
   spec_matrix <- res$amp
-  #freqs_khz <- res$freq
+  freqs_khz <- res$freq
 
   # Calculate number of windows and trim mfcc and spec to match
   # n_frames <- floor((length(samples) - window_samps) / hop_samps) + 1
@@ -173,16 +173,16 @@ calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
 
   # Spectral Slope (Algebraic)
   # This is much faster than doing it inside the loop and/or via Linear Regression
-  # x_bar <- mean(freqs_khz, na.rm = TRUE)
-  # x_diff <- freqs_khz - x_bar
-  # slope_denom <- sum(x_diff^2)
+  x_bar <- mean(freqs_khz, na.rm = TRUE)
+  x_diff <- freqs_khz - x_bar
+  slope_denom <- sum(x_diff^2)
   # colSums and matrix multiplication are significantly faster than apply(..., 2)
-  # slopes <- colSums(x_diff * (spec_matrix - colMeans(spec_matrix))) / slope_denom
-  # slopes <- colSums(x_diff * (spec_matrix - matrixStats::colMeans2(spec_matrix))) / slope_denom
+  #slopes <- colSums(x_diff * (spec_matrix - colMeans(spec_matrix))) / slope_denom
+  slopes <- colSums(x_diff * (spec_matrix - matrixStats::colMeans2(spec_matrix))) / slope_denom
 
   # Spectral Flux
-  # spec_diffs <- spec_matrix[, 2:n_frames] - spec_matrix[, 1:(n_frames-1)]
-  # flux <- c(NA, sqrt(colSums(spec_diffs^2)))
+  spec_diffs <- spec_matrix[, 2:n_frames] - spec_matrix[, 1:(n_frames-1)]
+  flux <- c(NA, sqrt(colSums(spec_diffs^2)))
 
   # Spectral Difference Variance (DFV)
   # dfv_vals <- c(0, apply(abs(spec_diffs), 2, var))
@@ -190,53 +190,111 @@ calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
 
   # Loop for functions that cannot be vectorised (reduce overhead)
   starts <- round(seq(1, length(samples) - window_samps, length.out = n_frames))
+  
+  num_cores <- parallel::detectCores() - 1
+  future::plan(future::multisession, workers = num_cores)
 
   # Pre-allocate results for loop-based features
-  # time_feats <- matrix(NA_real_, nrow = n_frames, ncol = 6) # RMS, ZCR, F0_mean, F0_sd, Crest, TempEnt
-  # spec_props_list <- vector("list", n_frames)
-
+  #time_feats <- matrix(NA_real_, nrow = n_frames, ncol = 6) # RMS, ZCR, F0_mean, F0_sd, Crest, TempEnt
+  #spec_props_list <- vector("list", n_frames)
+  
+  chunk_results <- future.apply::future_lapply(1:n_frames, function(i) {
+    
+    
+    chunk <- samples[starts[i]:(starts[i] + window_samps - 1)]
+    
+    # Time Domain
+    rms_val <-  sqrt(mean(chunk^2, na.rm = TRUE))
+    zcr_val <- sum(abs(diff(sign(chunk))) / 2) / (length(chunk) - 1) # ZCR
+    
+    # SpecProp (Requires a 2-col matrix input)
+    sp_df <- as.data.frame(seewave::specprop(cbind(freqs_khz, spec_matrix[, i]), f = sr))
+    
+    # F0 tracking
+    f0_mean <- NA_real_
+    f0_sd <- NA_real_
+    
+    f0_res <- tryCatch({
+      seewave::fund(chunk, f = sr, wl = min(fft_len, 512), ovlp = 0, plot = FALSE)
+    }, error = function(e) { NULL })
+    
+    if (!is.null(f0_res)) {
+      valid_f0 <- f0_res[!is.na(f0_res[, 2]) & f0_res[, 2] > 0, 2]
+      if (length(valid_f0) > 1) { # Requires at least 2 points for a valid SD
+        f0_mean <- mean(valid_f0, na.rm = TRUE) * 1000
+        f0_sd <- sd(valid_f0, na.rm = TRUE) * 1000
+      } else if (length(valid_f0) == 1) {
+        f0_mean <- valid_f0 * 1000
+      }
+    }
+    
+    temp_ent <- 0
+    if(rms_val > 0){
+      env_chunk <- seewave::env(chunk, f = sr, plot=FALSE, norm = TRUE)
+      temp_ent <- seewave::sh(env_chunk) # Temporal Shannon Entropy
+    }
+    
+    res_row <- data.frame(
+      rms_energy = rms_val,
+      zcr = zcr_val,
+      f0_mean = f0_mean,
+      temporal_entropy = temp_ent
+    )
+    
+    return(cbind(res_row, sp_df))
+    
+  }, future.seed = TRUE,
+  future.globals = c(
+    "samples", "starts", "window_samps", "sr", 
+    "freqs_khz", "spec_matrix", "fft_len"
+  ))
+  
+  future::plan(future::sequential)
+  
+  combined_chunk_feats <- dplyr::bind_rows(chunk_results)
+  
   # for (i in 1:n_frames) {
-
-  # chunk <- samples[starts[i]:(starts[i] + window_samps - 1)]
-
-  # Time Domain
-  # rms_val <-  sqrt(mean(chunk^2, na.rm = TRUE))
-  # time_feats[i, 1] <- rms_val  # RMS
-  # time_feats[i, 2] <- sum(abs(diff(sign(chunk))) / 2) / (length(chunk) - 1) # ZCR
-
-  # SpecProp (Requires a 2-col matrix input)
-  # spec_props_list[[i]] <- as.data.frame(seewave::specprop(cbind(freqs_khz, spec_matrix[, i]), f = sr))
-
-  # F0 tracking
-  # f0_res <- tryCatch({
-  #  seewave::fund(chunk, f = sr, wl = min(fft_len, 512), ovlp = 0, plot = FALSE)
-  # }, error = function(e) { NULL })
-
-  # if (!is.null(f0_res)) {
-  #  valid_f0 <- f0_res[!is.na(f0_res[, 2]) & f0_res[, 2] > 0, 2]
-  #  if (length(valid_f0) > 1) { # Requires at least 2 points for a valid SD
-  #    time_feats[i, 3] <- mean(valid_f0, na.rm = TRUE) * 1000
-  #    time_feats[i, 4] <- sd(valid_f0, na.rm = TRUE) * 1000
-  #  } else if (length(valid_f0) == 1) {
-  #    time_feats[i, 3] <- valid_f0 * 1000
-  #    time_feats[i, 4] <- NA # We have a mean, but no measurable variance
-  #  } else {
-  #    time_feats[i, 3:4] <- NA # No pitch found
-  #  }
-  # } else {
-  #  time_feats[i, 3:4] <- NA # Error in fund()
-  # }
-
-  # peak_val <- max(abs(chunk))
-  # time_feats[i, 5] <- if(rms_val > 0) peak_val / rms_val else 0 # Crest factor
-
-  # if(rms_val > 0){
-  #  env_chunk <- seewave::env(chunk, f = sr, plot=FALSE, norm = TRUE)
-  #  time_feats[i, 6] <- seewave::sh(env_chunk) # Temporal Shannon Entropy
-  # } else {
-  #  time_feats[i, 6] <- 0
-  # }
-
+  # 
+  #   chunk <- samples[starts[i]:(starts[i] + window_samps - 1)]
+  # 
+  #   # Time Domain
+  #   rms_val <-  sqrt(mean(chunk^2, na.rm = TRUE))
+  #   time_feats[i, 1] <- rms_val  # RMS
+  #   time_feats[i, 2] <- sum(abs(diff(sign(chunk))) / 2) / (length(chunk) - 1) # ZCR
+  # 
+  #   # SpecProp (Requires a 2-col matrix input)
+  #   spec_props_list[[i]] <- as.data.frame(seewave::specprop(cbind(freqs_khz, spec_matrix[, i]), f = sr))
+  # 
+  #   # F0 tracking
+  #   f0_res <- tryCatch({
+  #     seewave::fund(chunk, f = sr, wl = min(fft_len, 512), ovlp = 0, plot = FALSE)
+  #   }, error = function(e) { NULL })
+  # 
+  #   if (!is.null(f0_res)) {
+  #     valid_f0 <- f0_res[!is.na(f0_res[, 2]) & f0_res[, 2] > 0, 2]
+  #   if (length(valid_f0) > 1) { # Requires at least 2 points for a valid SD
+  #     time_feats[i, 3] <- mean(valid_f0, na.rm = TRUE) * 1000
+  #     time_feats[i, 4] <- sd(valid_f0, na.rm = TRUE) * 1000
+  #   } else if (length(valid_f0) == 1) {
+  #     time_feats[i, 3] <- valid_f0 * 1000
+  #     time_feats[i, 4] <- NA # We have a mean, but no measurable variance
+  #   } else {
+  #     time_feats[i, 3:4] <- NA # No pitch found
+  #   }
+  #   } else {
+  #     time_feats[i, 3:4] <- NA # Error in fund()
+  #   }
+  # 
+  #   # peak_val <- max(abs(chunk))
+  #   # time_feats[i, 5] <- if(rms_val > 0) peak_val / rms_val else 0 # Crest factor
+  # 
+  #   if(rms_val > 0){
+  #     env_chunk <- seewave::env(chunk, f = sr, plot=FALSE, norm = TRUE)
+  #     time_feats[i, 6] <- seewave::sh(env_chunk) # Temporal Shannon Entropy
+  #   } else {
+  #     time_feats[i, 6] <- 0
+  #   }
+  # 
   # }
 
   mfcc_df <- as.data.frame(all_mels[1:n_frames, ])
@@ -250,18 +308,19 @@ calc_features <- function(wav_input, window_ms = 30, overlap = 0.5) {
   final_df <- data.frame(
     window_index = 1:n_frames,
     start_time = (starts - 1) / sr,
-    end_time = (starts - 1 + window_samps) / sr # ,
+    end_time = (starts - 1 + window_samps) / sr,
     # rms_energy = time_feats[, 1],
     # zcr = time_feats[, 2],
-    # spectral_slope = slopes,
-    # spectral_flux = flux,
+    spectral_slope = slopes,
+    spectral_flux = flux#,
     # spec_dfv = dfv_vals,
-    # f0_mean = time_feats[, 3],
+    #f0_mean = time_feats[, 3],
     # f0_sd = time_feats[, 4],
     # crest_factor = time_feats[, 5],
-    # temporal_entropy = time_feats[, 6]
+    #temporal_entropy = time_feats[, 6]
   ) %>%
-    cbind( # dplyr::bind_rows(spec_props_list),
+    cbind( combined_chunk_feats,
+      #dplyr::bind_rows(spec_props_list),
       mfcc_df, mfcc_d1_df, mfcc_d2_df
     ) %>%
     dplyr::select(-any_of("prec"))
@@ -293,6 +352,7 @@ extract_features <- function(original_path, audio_path, p_cfg = list()) {
     window_ms = p_cfg$win_len,
     overlap = p_cfg$overlap
   )
+  message(colnames(features_df))
   message("Feature Calculation Complete.")
   # 3. Metadata Tagging
   # We add the method options used here so it's baked into the dataframe
