@@ -350,7 +350,8 @@ server <- function(input, output, session) {
         ))
         
         prob_squawk <- predict(squawk_model, features_df)$predictions[, "1"]
-        features_df$prob_squawk <- prob_squawk
+        prob_squawk_smooth <- zoo::rollmean(prob_squawk, k = 5, fill = 0, align = "center")
+        features_df$prob_squawk <- prob_squawk_smooth
         features_df$auto_class <- ifelse(features_df$prob_squawk > 0.1, "Squawk", "Background")
         features_df$source_file <- files$name[i]
 

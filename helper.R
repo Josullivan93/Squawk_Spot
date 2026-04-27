@@ -352,7 +352,6 @@ extract_features <- function(original_path, audio_path, p_cfg = list()) {
     window_ms = p_cfg$win_len,
     overlap = p_cfg$overlap
   )
-  message(colnames(features_df))
   message("Feature Calculation Complete.")
   # 3. Metadata Tagging
   # We add the method options used here so it's baked into the dataframe
