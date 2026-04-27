@@ -352,7 +352,7 @@ server <- function(input, output, session) {
         prob_squawk <- predict(squawk_model, features_df)$predictions[, "1"]
         prob_squawk_smooth <- zoo::rollmean(prob_squawk, k = 5, fill = 0, align = "center")
         features_df$prob_squawk <- prob_squawk_smooth
-        features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Squawk", "Background")
+        features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Vocalisation", "Background")
         features_df$source_file <- files$name[i]
 
         data_storage$full_wave_object <- readWave(files$datapath[i])
@@ -360,7 +360,7 @@ server <- function(input, output, session) {
         chunking_results <- group_and_slice_chunks(
           features_df = features_df,
           full_wave = data_storage$full_wave_object,
-          positive_class = "Squawk", # Tell the function to look at our candidate logic
+          positive_class = "Vocalisation", # Tell the function to look at our candidate logic
           buffer_time = 1.0, # 1 second before/after for context
           temp_dir = temp_dir,
           target_length = 3.0,
@@ -387,7 +387,7 @@ server <- function(input, output, session) {
         removeModal()
         showModal(modalDialog(
           title = "No Candidates Found",
-          "The model did not detect any squawks in these files based on the current threshold (0.1).",
+          "The model did not detect any vocalisations in these files based on the current threshold (0.1).",
           footer = modalButton("Try again"),
           easyClose = TRUE
         ))
