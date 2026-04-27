@@ -513,7 +513,7 @@ group_and_slice_chunks <- function(features_df, full_wave, positive_class,
 
 # classify_and_move
 classify_and_move <- function(label, run_id, features_df = NULL,
-                              temp_dir = NULL, output_dir = NULL) {
+                              temp_dir = NULL, output_dir = NULL, save_copy = FALSE) {
   if (missing(label) || missing(run_id)) stop("label and run_id are required.")
   if (is.null(temp_dir) && is.null(features_df)) {
     stop("Either 'features_df' (in-memory) or 'temp_dir' must be provided (features.csv lives in temp_dir).")
@@ -613,6 +613,17 @@ classify_and_move <- function(label, run_id, features_df = NULL,
   safe_name <- paste0(base_name, "_run", run_id_int, ".", ext)
   new_clip_path <- file.path(label_dir, safe_name)
 
+  # Save annotated copy before original is moved/deleted <<<
+  annotated_path <- NULL
+  is_skip <- (label == "Skipped")
+  if (save_copy && !is_skip) {
+    annotated_dir <- file.path(output_dir, "Annotated_Copies")
+    if (!dir.exists(annotated_dir)) dir.create(annotated_dir, recursive = TRUE)
+    
+    annotated_path <- file.path(annotated_dir, safe_name)
+    file.copy(clip_path, annotated_path, overwrite = TRUE)
+  }
+  
   # move or copy
   moved <- FALSE
   try(
@@ -632,7 +643,7 @@ classify_and_move <- function(label, run_id, features_df = NULL,
   rows_to_move[, filepath := new_clip_path]
   
   # Dont write if skipped
-  is_skip <- (label == "Skipped")
+  #is_skip <- (label == "Skipped")
   
   if(!is_skip){
     # Append these rows to master_features.csv
@@ -674,13 +685,14 @@ classify_and_move <- function(label, run_id, features_df = NULL,
     remaining_features = remaining,
     moved_features = rows_to_move,
     old_path = clip_path,
-    new_path = new_clip_path
+    new_path = new_clip_path,
+    annotated_path = annotated_path
   ))
   
 }
 
 # Classification button
-classify_run <- function(features_df, runs_table, current_run_idx, label, temp_dir, output_dir) {
+classify_run <- function(features_df, runs_table, current_run_idx, label, temp_dir, output_dir, save_copy = FALSE) {
   # Guard: check runs_table exists and run index is valid
   if (is.null(runs_table) || current_run_idx > nrow(runs_table)) {
     return(features_df)
@@ -699,7 +711,8 @@ classify_run <- function(features_df, runs_table, current_run_idx, label, temp_d
     run_id = current_run_id,
     features_df = features_df,
     temp_dir = temp_dir,
-    output_dir = output_dir
+    output_dir = output_dir,
+    save_copy = save_copy
   )
 
   return(updated_features)
@@ -805,7 +818,7 @@ check_completion <- function(data_storage, temp_dir, output_dir) {
 }
 
 # Function to handle annotation logic
-handle_classification <- function(data_storage, label_name, temp_dir, output_dir) {
+handle_classification <- function(data_storage, label_name, temp_dir, output_dir, save_copy = FALSE) {
   
   if (data_storage$current_run > length(data_storage$files_to_classify)) {
     return(NULL) # Prevent out-of-bounds errors
@@ -818,7 +831,8 @@ handle_classification <- function(data_storage, label_name, temp_dir, output_dir
     current_run_idx = data_storage$current_run,
     label = label_name,
     temp_dir = temp_dir,
-    output_dir = here("Output")
+    output_dir = output_dir,
+    save_copy = save_copy
   )
   
   # Update memory
@@ -830,6 +844,7 @@ handle_classification <- function(data_storage, label_name, temp_dir, output_dir
     label = label_name,
     old_path = res$old_path,
     new_path = res$new_path,
+    annotated_path = res$annotated_path,
     moved_features = res$moved_features
   )
   data_storage$history <- c(list(action_record), data_storage$history)

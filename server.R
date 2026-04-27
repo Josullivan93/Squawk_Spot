@@ -460,23 +460,23 @@ server <- function(input, output, session) {
   })
 
   observeEvent(list(input$btn_squawk, input$hotkey_1), { 
-    handle_classification(data_storage, "Squawk", temp_dir, here("Output"))
+    handle_classification(data_storage, "Squawk", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_alarm, input$hotkey_2), { 
-    handle_classification(data_storage, "Alarm Call", temp_dir, here("Output"))
+    handle_classification(data_storage, "Alarm Call", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_noise, input$hotkey_3), { 
-    handle_classification(data_storage, "Noise", temp_dir, here("Output"))
+    handle_classification(data_storage, "Noise", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_unknown, input$hotkey_4), { 
-    handle_classification(data_storage, "Unknown", temp_dir, here("Output"))
+    handle_classification(data_storage, "Unknown", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_other, input$hotkey_5), { 
-    handle_classification(data_storage, "Other Vocalisation", temp_dir, here("Output"))
+    handle_classification(data_storage, "Other Vocalisation", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   
@@ -495,6 +495,11 @@ server <- function(input, output, session) {
     # 2. Physically move the file back to the 'tmp' folder
     if (file.exists(last_action$new_path)) {
       file.rename(last_action$new_path, last_action$old_path)
+    }
+    
+    # Clean up the annotated copy if it exists
+    if (!is.null(last_action$annotated_path) && file.exists(last_action$annotated_path)) {
+      file.remove(last_action$annotated_path)
     }
     
     # 3. Clean up the Output CSVs (if it wasn't a skip)
