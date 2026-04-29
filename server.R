@@ -132,7 +132,13 @@ server <- function(input, output, session) {
     chunk_wave@left <- as.numeric(chunk_wave@left) / 32768
 
     # Waveform (oscillo)
-    osc_data <- seewave::oscillo(chunk_wave@left, f = sample_rate, plot = FALSE)
+    n_samples <- length(chunk_wave@left)
+    target_points <- 5000
+    step_size <-  max(1, floor(n_samples / target_points))
+    downsampled_vector <- chunk_wave@left[seq(1, n_samples, by = step_size)]
+    f_new = sample_rate/step_size
+    osc_data <- seewave::oscillo(downsampled_vector, f = f_new, plot = FALSE)
+    #osc_data <- seewave::oscillo(chunk_wave@left, f = sample_rate, plot = FALSE)
     time_vector <- seq(0, duration, length.out = nrow(osc_data))
 
     # Spectrogram
@@ -140,6 +146,17 @@ server <- function(input, output, session) {
       f = sample_rate,
       plot = FALSE, osc = FALSE
     )
+    
+    max_khz_to_keep <- 15
+    freq_idx <- which(spec_data$freq <= max_khz_to_keep)
+    spec_data$freq <- spec_data$freq[freq_idx]
+    spec_data$amp <- spec_data$amp[freq_idx, ]
+    
+    target_time_bins <- 1000
+    step_t <- max(1, floor(length(spec_data$time) / target_time_bins))
+    time_idx <- seq(1, length(spec_data$time), by = step_t)
+    spec_data$time <- spec_data$time[time_idx]
+    spec_data$amp[,time_idx]
 
     # Determine chunk_start (slice_start)
     chunk_start <- 0
@@ -165,11 +182,13 @@ server <- function(input, output, session) {
           }
     }
 
+    rm(chunk_wave)
+    
     list(
       chunk_path  = chunk_path,
       chunk_start = chunk_start,
       highlight   = highlight,
-      wave        = chunk_wave,
+      #wave        = chunk_wave,
       duration    = duration,
       osc_data    = osc_data,
       time_vector = time_vector,
@@ -180,7 +199,6 @@ server <- function(input, output, session) {
   # DEFINE PLOT OUTPUTS
 
   output$waveform_plot <- renderPlotly({
-    req(data_storage$current_run <= length(data_storage$files_to_classify))
     req(current_chunk_full())
     chunk <- current_chunk_full()
 
@@ -195,7 +213,7 @@ server <- function(input, output, session) {
       )
     }
 
-    plot_ly(x = chunk$time_vector, y = chunk$osc_data[, 1], type = "scatter", mode = "lines", hoverinfo = "x+y", name = "Waveform") |>
+    plot_ly(x = chunk$time_vector, y = chunk$osc_data, type = "scatter", mode = "lines", hoverinfo = "x+y", name = "Waveform") |>
       layout(
         xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
         yaxis = list(range = y_range_wave, fixedrange = TRUE, title = "Amplitude"),
@@ -387,7 +405,7 @@ server <- function(input, output, session) {
         removeModal()
         showModal(modalDialog(
           title = "No Candidates Found",
-          "The model did not detect any vocalisations in these files based on the current threshold (0.1).",
+          "The model did not detect any vocalisations in these files based on the current threshold (0.25).",
           footer = modalButton("Try again"),
           easyClose = TRUE
         ))

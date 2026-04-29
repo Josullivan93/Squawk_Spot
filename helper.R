@@ -852,6 +852,10 @@ handle_classification <- function(data_storage, label_name, temp_dir, output_dir
   )
   data_storage$history <- c(list(action_record), data_storage$history)
   
+  if (length(data_storage$history) > 20) {
+    data_storage$history <- data_storage$history[1:20]
+  }
+  
   # Advance the UI
   data_storage$current_run <- data_storage$current_run + 1
   
@@ -859,6 +863,8 @@ handle_classification <- function(data_storage, label_name, temp_dir, output_dir
     list(runs = data_storage$runs_table, feats = data_storage$features),
     file.path(temp_dir, "app_state.rds")
   )
+  
+  gc()
   
   return(TRUE)
 }
