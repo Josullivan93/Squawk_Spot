@@ -668,6 +668,19 @@ classify_and_move <- function(label, run_id, features_df = NULL,
     } else {
       fwrite(rows_to_move, label_csv)
     }
+  } else {
+    
+    skip_log_csv <- file.path(output_dir, "skipped_features.csv")
+    if(file.exists(skip_log_csv)){
+      
+      skip_df <- fread(skip_log_csv)
+      skip_df <- rbind(skip_df, rows_to_move, fill = TRUE)
+      fwrite(skip_df, skip_log_csv)
+      
+    } else { 
+      fwrite(rows_to_move, skip_log_csv)
+      }
+    
   }
   
   # Remove only this run from features_df and save back to tmp
@@ -847,20 +860,24 @@ handle_classification <- function(data_storage, label_name, temp_dir, output_dir
     label = label_name,
     old_path = res$old_path,
     new_path = res$new_path,
-    annotated_path = res$annotated_path,
-    moved_features = res$moved_features
+    annotated_path = res$annotated_path#,
+    #moved_features = res$moved_features
   )
   data_storage$history <- c(list(action_record), data_storage$history)
   
-  if (length(data_storage$history) > 20) {
-    data_storage$history <- data_storage$history[1:20]
+  if (length(data_storage$history) > 25) {
+    data_storage$history <- data_storage$history[1:25]
   }
   
   # Advance the UI
   data_storage$current_run <- data_storage$current_run + 1
   
   saveRDS(
-    list(runs = data_storage$runs_table, feats = data_storage$features),
+    list(runs = data_storage$runs_table,
+         feats = data_storage$features,
+         history = data_storage$history,
+         current = data_storage$current_run
+         ),
     file.path(temp_dir, "app_state.rds")
   )
   

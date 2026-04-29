@@ -156,7 +156,7 @@ server <- function(input, output, session) {
     step_t <- max(1, floor(length(spec_data$time) / target_time_bins))
     time_idx <- seq(1, length(spec_data$time), by = step_t)
     spec_data$time <- spec_data$time[time_idx]
-    spec_data$amp[,time_idx]
+    spec_data$amp <- spec_data$amp[,time_idx]
 
     # Determine chunk_start (slice_start)
     chunk_start <- 0
@@ -373,11 +373,11 @@ server <- function(input, output, session) {
         features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Vocalisation", "Background")
         features_df$source_file <- files$name[i]
 
-        data_storage$full_wave_object <- readWave(files$datapath[i])
+        temp_wave <- readWave(files$datapath[i])
 
         chunking_results <- group_and_slice_chunks(
           features_df = features_df,
-          full_wave = data_storage$full_wave_object,
+          full_wave = temp_wave,
           positive_class = "Vocalisation", # Tell the function to look at our candidate logic
           buffer_time = 1.0, # 1 second before/after for context
           temp_dir = temp_dir,
@@ -450,6 +450,7 @@ server <- function(input, output, session) {
 
     feat_path <- file.path(temp_dir, "features.csv")
     runs_path <- file.path(temp_dir, "runs.csv")
+    state_path <- file.path(temp_dir, "app_state.rds")
 
     # Check if the session files actually exist
     if (!file.exists(feat_path) || !file.exists(runs_path)) {
@@ -457,16 +458,20 @@ server <- function(input, output, session) {
       return()
     }
 
-    # 1. Load the remaining unclassified data
-    data_storage$features <- fread(feat_path)
-    data_storage$runs_table <- fread(runs_path)
-
-    # 2. Update the file list for the audio player
-    # These paths point to the .wav clips already sitting in the tmp folder
+    if (file.exists(state_path)) {
+      state <- readRDS(state_path)
+      data_storage$features <- state$feats
+      data_storage$runs_table <- state$runs
+      data_storage$history <- state$history      # RESTORES metadata history
+      data_storage$current_run <- state$current   # RESTORES exact position
+    } else {
+      # Fallback: Load from CSVs and reset index if RDS is missing[cite: 1]
+      data_storage$features <- fread(feat_path)
+      data_storage$runs_table <- fread(runs_path)
+      data_storage$current_run <- 1 
+    }
+    
     data_storage$files_to_classify <- data_storage$runs_table$filepath
-
-    # 3. Reset index to 1 (since finished runs were already removed from these files)
-    data_storage$current_run <- 1
 
     # 4. Flip the UI switches
     shinyjs::hide("pre_process_sidebar")
@@ -509,7 +514,9 @@ server <- function(input, output, session) {
     
     # 1. Pop the last action off the stack
     last_action <- data_storage$history[[1]]
-    data_storage$history <- data_storage$history[-1] 
+    data_storage$history <- data_storage$history[-1]
+    
+    master_csv <- here("Output", "master_features.csv")
     
     # 2. Physically move the file back to the 'tmp' folder
     if (file.exists(last_action$new_path)) {
@@ -527,6 +534,7 @@ server <- function(input, output, session) {
       master_csv <- here("Output", "master_features.csv")
       if (file.exists(master_csv)) {
         m_df <- fread(master_csv)
+        restored_features <- m_df[run_id == last_action$run_id]
         m_df <- m_df[run_id != last_action$run_id] # Purge the bad run
         fwrite(m_df, master_csv)
       }
@@ -540,7 +548,17 @@ server <- function(input, output, session) {
     }
     
     # 4. Reconstruct the features (Undo the label and filepath overwrites)
-    restored_features <- copy(last_action$moved_features)
+    if (last_action$label == "Skipped") {
+      skip_csv <- here("Output", "skipped_features.csv")
+      if (file.exists(skip_csv)) {
+        s_df <- fread(skip_csv)
+        restored_features <- s_df[run_id == last_action$run_id]
+        # Remove from skip log
+        fwrite(s_df[run_id != last_action$run_id], skip_csv)
+      }
+    }
+    
+    restored_features <- copy(restored_features)
     restored_features[, user_class := NA] 
     restored_features[, filepath := last_action$old_path]
     
@@ -564,12 +582,17 @@ server <- function(input, output, session) {
     
     # Save State
     saveRDS(
-      list(runs = data_storage$runs_table, feats = data_storage$features),
+      list(runs = data_storage$runs_table, 
+           feats = data_storage$features,
+           history = data_storage$history,
+           current = data_storage$current_run
+           ),
       file.path(temp_dir, "app_state.rds")
     )
     
     showNotification(paste("Undid classification for Run", last_action$run_id), type = "warning")
-  })
+    gc()
+    })
 
   # Restart button
   observeEvent(input$restart_app, {
