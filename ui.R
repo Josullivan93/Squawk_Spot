@@ -7,7 +7,7 @@ ui <- fluidPage(
       style = "position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
                background: white; z-index: 10000; display: flex; 
                flex-direction: column; justify-content: center; align-items: center;",
-      h2("Squawk Spot", style="color: #007bff; font-weight: bold;"),
+      h2(tags$s("Squawk Spot"), " Woof Watch", style="color: #007bff; font-weight: bold;"),
       div(class = "circular-loader-container",
           div(class = "loader-circle",
               tags$img(src = "loader.gif")
