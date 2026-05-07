@@ -4,7 +4,18 @@ if (!require("pacman")) {
   library(pacman)
 }
 
-p_load( shiny, shinyjs, here, data.table, plotly, zip, zoo)
+p_load(
+  # Web & UI
+  shiny, shinyjs, plotly,
+  # Data Manipulation & Paths
+  dplyr, tidyr, lubridate, data.table, here, zoo, matrixStats,
+  # Audio / Signal Processing
+  tuneR, seewave, signal,
+  # Modeling & Performance
+  ranger, future, future.apply, reticulate,
+  # Utilities
+  zip
+)
 
 # Load your helper functions (Logic only, no heavy data yet)
 source("helper.R")
