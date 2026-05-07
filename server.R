@@ -15,8 +15,6 @@ server <- function(input, output, session) {
       
       # Step 1: Load R Libraries
       incProgress(0.4, detail = "Loading Bioacoustic Toolkits...")
-      # pacman::p_load(here, plotly, dplyr, tidyverse, tuneR, seewave, reticulate, data.table, ranger,
-      #                future.apply, matrixStats, progress, signal)
       
       # Step 2: Initialize Python
       incProgress(0.4, detail = "Starting Python Noise Reduction Engine...")
