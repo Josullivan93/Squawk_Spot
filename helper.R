@@ -1,12 +1,5 @@
 # Helper Functions
 
-# # Noise Reduction
-# noise_reduce_channel <- function(channel_py, sr_py, nr_flag, nr_object) {
-#   # Apply noise reduction (prop_decrease = 0.75 for balance)
-#   signal_float <- nr_object$reduce_noise(y = channel_py, sr = sr_py, stationary = nr_flag, prop_decrease = 0.75)
-#   return(as.numeric(py_to_r(signal_float)))
-# }
-
 # Preprocess Wav
 preprocess_wav <- function(path, # Full filepath of wav file
                            pre_emph_coeff = NULL, # Pre-emphasis coefficient (0.9 to 1, e.g. 0.97)
@@ -383,35 +376,6 @@ ann_cleanup <- function(temp_dir = here("Output", "tmp"),
   if (file.exists(runs_path)) unlink(runs_path)
 
   message("Temporary folder cleaned and Null_Annotations updated.")
-}
-
-# Helper: generate shapes for Plotly
-generate_shapes <- function(playhead = NULL, highlight = NULL) {
-  shapes <- list()
-
-  # highlight rectangle
-  if (!is.null(highlight)) {
-    shapes[[length(shapes) + 1]] <- list(
-      type = "rect",
-      x0 = highlight$start,
-      x1 = highlight$end,
-      y0 = 0, y1 = 1, yref = "paper",
-      fillcolor = "rgba(255, 255, 0, 0.3)",
-      line = list(width = 0)
-    )
-  }
-
-  # playhead line
-  if (!is.null(playhead)) {
-    shapes[[length(shapes) + 1]] <- list(
-      type = "line",
-      x0 = playhead, x1 = playhead,
-      y0 = 0, y1 = 1, yref = "paper",
-      line = list(color = "red", dash = "dash")
-    )
-  }
-
-  shapes
 }
 
 # Helper function to avoid repeating the "unavailable" plot code

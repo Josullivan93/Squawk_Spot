@@ -13,7 +13,7 @@ ui <- fluidPage(
               tags$img(src = "loader.gif")
           )
       ),
-      p("Initializing R packages and Python environment...", style="color: #666;")
+      p("Initializing R packages...", style="color: #666;")
   ),
 
   tags$head(

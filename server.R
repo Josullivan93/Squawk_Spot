@@ -91,19 +91,11 @@ server <- function(input, output, session) {
     }
 
     # Read WAV
-    chunk_wave <- readWave(actual_path)
-    req(seewave::duration(chunk_wave) > 0.001)
+    chunk_wave <- preprocess_wav(actual_path, normalise = TRUE)
     duration <- seewave::duration(chunk_wave)
 
     # Get sample rate
     sample_rate <- chunk_wave@samp.rate
-
-    # Check stereo and convert to mono if so
-    is_stereo <- chunk_wave@stereo
-    if (is_stereo) chunk_wave <- mono(chunk_wave, which = "both")
-
-    # Type conversion: Map integers to decimals
-    chunk_wave@left <- as.numeric(chunk_wave@left) / 32768
 
     # Waveform (oscillo)
     n_samples <- length(chunk_wave@left)
@@ -199,13 +191,16 @@ server <- function(input, output, session) {
   # Update progress bar
   observeEvent(data_storage$current_run, {
     req(data_storage$files_to_classify)
-
-    progress <- (data_storage$current_run - 1) / length(data_storage$files_to_classify) * 100
-
-    # Use shinyjs to update the style of the progress bar
-    shinyjs::runjs(paste0(
-      "document.getElementById('progress_bar').style.width = '", progress, "%';"
-    ))
+    
+    total <- length(data_storage$files_to_classify)
+    if (total > 0) {
+      progress <- ((data_storage$current_run - 1) / total) * 100
+  
+      # Use shinyjs to update the style of the progress bar
+      shinyjs::runjs(paste0(
+        "document.getElementById('progress_bar').style.width = '", progress, "%';"
+      ))
+    }
   })
 
   # UI Update Logic
@@ -232,8 +227,10 @@ server <- function(input, output, session) {
       for (i in seq_len(nrow(files))) {
         incProgress(1 / nrow(files), detail = paste("Registering:", files$name[i]))
         
-        # 1. Move file to tmp folder so it's ready for the audio player
-        dest_path <- file.path(temp_dir, files$name[i])
+        # 1. Create unique name & Move file to tmp folder so it's ready for the audio player
+        unique_name <- paste0("idx", i, "_", files$name[i])
+        dest_path <- file.path(temp_dir, unique_name)
+        
         file.copy(files$datapath[i], dest_path, overwrite = TRUE)
         
         # 2. Get duration for metadata
@@ -252,7 +249,7 @@ server <- function(input, output, session) {
         # 4. Create dummy 'features' so the classification/history logic doesn't break
         all_feats[[i]] <- data.table(
           run_id = run_id,
-          file_id = tools::file_path_sans_ext(files$name[i]),
+          file_id = tools::file_path_sans_ext(unique_name),
           filepath = dest_path,
           user_class = as.character(NA)
         )
@@ -356,7 +353,11 @@ server <- function(input, output, session) {
     
     # 2. Physically move the file back to the 'tmp' folder
     if (file.exists(last_action$new_path)) {
-      file.rename(last_action$new_path, last_action$old_path)
+      success <- file.rename(last_action$new_path, last_action$old_path)
+      if(!success) {
+        showNotification("Undo failed: File is locked by another program.", type = "error")
+        return()
+      }
     }
     
     # Clean up the annotated copy if it exists
