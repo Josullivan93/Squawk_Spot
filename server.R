@@ -1,12 +1,6 @@
 # server.R: Contains the core logic of the Shiny application.
 options(shiny.maxRequestSize = 30 * 1024^2)
 
-# Path to your final trained models
-# path_vocal_model <- here("models", "final_vocal_model.rds")
-squawk_model <- readRDS(here("models", "final_vocalisation_model.rds"))
-# Extract feature names
-features_used <- squawk_model$forest$independent.variable.names
-# message(features_used)
 # Server Definition
 server <- function(input, output, session) {
   
@@ -15,24 +9,6 @@ server <- function(input, output, session) {
       
       # Step 1: Load R Libraries
       incProgress(0.4, detail = "Loading Bioacoustic Toolkits...")
-      
-      # Step 2: Initialize Python
-      incProgress(0.4, detail = "Starting Python Noise Reduction Engine...")
-      # 1. Python Environment Setup ----
-      # This runs once when source(helper.R) is called by server.R
-      tryCatch(
-        {
-          if (!reticulate::virtualenv_exists("r-reticulate")) {
-            reticulate::virtualenv_create("r-reticulate", packages = c("numpy", "scipy", "noisereduce"))
-          }
-          reticulate::use_virtualenv("r-reticulate", required = TRUE)
-          nr <<- import("noisereduce", convert = FALSE)
-          cat("Python (noisereduce) loaded successfully.\n")
-        },
-        error = function(e) {
-          warning("Python setup failed. Noise reduction will be unavailable. Error: ", e$message)
-        }
-      )
       
       # Step 3: Finalize
       incProgress(0.2, detail = "Opening Workspace...")
@@ -156,37 +132,14 @@ server <- function(input, output, session) {
     spec_data$time <- spec_data$time[time_idx]
     spec_data$amp <- spec_data$amp[,time_idx]
 
-    # Determine chunk_start (slice_start)
-    chunk_start <- 0
-    if (!is.null(data_storage$runs_table) && nrow(data_storage$runs_table) >= run_idx) {
-      if ("slice_start" %in% names(data_storage$runs_table)) {
-        ss <- data_storage$runs_table$slice_start[run_idx]
-        if (!is.na(ss)) chunk_start <- as.numeric(ss)
-      } else {
-        ss2 <- data_storage$runs_table$start_time[run_idx]
-        if (!is.na(ss2)) chunk_start <- as.numeric(ss2)
-      }
-    }
-
-    # Highlight times relative to chunk_start
-    highlight <- NULL
     times <- current_run_times()
-    if (!is.null(times)) {
-      start_rel <- max(0, min(duration, times$start - chunk_start))
-      end_rel <- max(0, min(duration, times$end - chunk_start))
-      highlight <- if (end_rel > start_rel){ 
-        list(start = start_rel, end = end_rel) 
-      }else {list(start = start_rel, end = start_rel)
-          }
-    }
 
     rm(chunk_wave)
     
     list(
       chunk_path  = chunk_path,
-      chunk_start = chunk_start,
-      highlight   = highlight,
-      #wave        = chunk_wave,
+      chunk_start = 0,
+      highlight   = NULL,
       duration    = duration,
       osc_data    = osc_data,
       time_vector = time_vector,
@@ -203,19 +156,10 @@ server <- function(input, output, session) {
     y_range_wave <- range(chunk$osc_data[, 1], na.rm = TRUE)
     if (any(!is.finite(y_range_wave))) y_range_wave <- c(-1, 1)
 
-    shapes_base <- list()
-    if (input$show_highlight && !is.null(chunk$highlight)) {
-      shapes_base[[1]] <- list(
-        type = "rect", x0 = chunk$highlight$start, x1 = chunk$highlight$end,
-        y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(0, 255, 255, 0.3)", line = list(width = 0)
-      )
-    }
-
     plot_ly(x = chunk$time_vector, y = chunk$osc_data, type = "scatter", mode = "lines", hoverinfo = "x+y", name = "Waveform") |>
       layout(
         xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
-        yaxis = list(range = y_range_wave, fixedrange = TRUE, title = "Amplitude"),
-        shapes = shapes_base
+        yaxis = list(range = y_range_wave, fixedrange = TRUE, title = "Amplitude")
       )
   })
 
@@ -228,19 +172,10 @@ server <- function(input, output, session) {
     min_db <- if (length(finite_vals) > 0) min(finite_vals, na.rm = TRUE) else -100 # Safe default
     amp_db[!is.finite(amp_db)] <- min_db
 
-    shapes_base <- list()
-    if (input$show_highlight && !is.null(chunk$highlight)) {
-      shapes_base[[1]] <- list(
-        type = "rect", x0 = chunk$highlight$start, x1 = chunk$highlight$end,
-        y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(0, 255, 255, 0.3)", line = list(width = 0.5, color = "rgba(0, 255, 255, 1)")
-      )
-    }
-
     plot_ly(z = amp_db, x = chunk$spec_data$time, y = chunk$spec_data$freq, type = "heatmap", colors = "inferno", hoverinfo = "x+y+z", showscale = FALSE) |>
       layout(
         xaxis = list(range = c(0, chunk$duration), fixedrange = TRUE, title = "Time (s)"),
-        yaxis = list(range = c(0, 13), title = "Frequency (kHz)"),
-        shapes = shapes_base
+        yaxis = list(range = c(0, 13), title = "Frequency (kHz)")
       )
   })
 
@@ -250,12 +185,6 @@ server <- function(input, output, session) {
     chunk <- current_chunk_full()
 
     shapes <- list()
-    if (input$show_highlight && !is.null(chunk$highlight)) {
-      shapes[[1]] <- list(
-        type = "rect", x0 = chunk$highlight$start, x1 = chunk$highlight$end,
-        y0 = 0, y1 = 1, yref = "paper", fillcolor = "rgba(0, 255, 255, 0.3)", line = list(width = 0.5, color = "rgba(0, 255, 255, 1)")
-      )
-    }
 
     ph <- max(0, min(chunk$duration, as.numeric(playhead_time())))
     shapes[[length(shapes) + 1]] <- list(
@@ -284,31 +213,6 @@ server <- function(input, output, session) {
     shinyjs::hide("main_ui")
     temp_dir <- here("Output", "tmp")
     if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
-
-    old_files <- list.files(temp_dir, full.names = TRUE)
-    if (length(old_files) > 0) {
-      features_path <- file.path(temp_dir, "features.csv")
-      if (file.exists(features_path)) {
-        old_dir <- here("Old")
-        if (!dir.exists(old_dir)) dir.create(old_dir, recursive = TRUE)
-        old_csv <- file.path(old_dir, paste0("Old_features_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".csv"))
-        old_moved <- file.rename(features_path, old_csv)
-        if (!old_moved) {
-          copied <- file.copy(features_path, old_csv, overwrite = TRUE)
-          if (!copied) stop("Failed to move or copy old features.csv to ", old_csv)
-          unlink(features_path)
-        }
-      }
-      unlink(old_files, recursive = TRUE)
-    }
-  })
-
-  observeEvent(data_storage$features, {
-    if (!is.null(data_storage$features)) shinyjs::show("main_ui")
-  })
-
-  observeEvent(data_storage$features, {
-    if (!is.null(data_storage$features)) shinyjs::show("main_ui")
   })
 
   # File Processing and Chunking
@@ -318,126 +222,60 @@ server <- function(input, output, session) {
     shinyjs::show("loading_overlay")
     on.exit(shinyjs::hide("loading_overlay"))
 
-    all_feats <- list()
-    all_chunks <- list()
-    all_files <- list()
-    global_run_offset <- 0
-    done_file_ids <- c()
-    
-    # 2. If 'Append' is checked, load the existing master file first
-    master_path <- here("Output", "master_features.csv")
-    if (file.exists(master_path)) {
-      prior_anns <- fread(master_path)
-      message("Pre-loading existing master data for merging...")
-      if (!is.null(prior_anns)) {
-        # Get unique filenames already in the master
-        done_file_ids <- unique(prior_anns$file_id)
-      }
-    }
-    
+    temp_dir <- here("Output", "tmp")
     files <- input$upload_file
-
-    withProgress(message = "Processing...", value = 0, {
+    
+    all_runs <- list()
+    all_feats <- list()
+    
+    withProgress(message = "Preparing Files...", value = 0, {
       for (i in seq_len(nrow(files))) {
-        incProgress(1 / nrow(files), detail = paste("Processing:", files$name[i]))
+        incProgress(1 / nrow(files), detail = paste("Registering:", files$name[i]))
         
-        original_path <- files$datapath[i]
-        this_file_id <- tools::file_path_sans_ext(basename(files$name[i]))
+        # 1. Move file to tmp folder so it's ready for the audio player
+        dest_path <- file.path(temp_dir, files$name[i])
+        file.copy(files$datapath[i], dest_path, overwrite = TRUE)
         
-        # --- THE MISSING CHECK ---
-        if (this_file_id %in% done_file_ids) {
-          message(paste("Skipping:", this_file_id, "- already in Master Features."))
-          next # Jump to the next file in the loop
-        }
-
-        # 1. Load and calc features
-
-        features_df <- extract_features(files$name[i], files$datapath[i], p_cfg = list(
-          label           = "None_PreEmph",
-          noise_reduction = "None",
-          win_len         = 100,
-          overlap         = 0.75,
-          pre_emph_coeff  = 0.97,
-          filter_type     = "None",
-          cutoff_highpass = NULL,
-          cutoff_lowpass  = NULL,
-          filter_order    = 4,
-          normalise       = TRUE
-        ))
+        # 2. Get duration for metadata
+        w <- readWave(dest_path, header = TRUE)
+        dur <- w$samples / w$sample.rate
         
-        prob_squawk <- predict(squawk_model, features_df)$predictions[, "1"]
-        prob_squawk_smooth <- zoo::rollmean(prob_squawk, k = 5, fill = 0, align = "center")
-        features_df$prob_squawk <- prob_squawk_smooth
-        features_df$auto_class <- ifelse(features_df$prob_squawk > 0.25, "Vocalisation", "Background")
-        features_df$source_file <- files$name[i]
-
-        temp_wave <- readWave(files$datapath[i])
-
-        chunking_results <- group_and_slice_chunks(
-          features_df = features_df,
-          full_wave = temp_wave,
-          positive_class = "Vocalisation", # Tell the function to look at our candidate logic
-          buffer_time = 1.0, # 1 second before/after for context
-          temp_dir = temp_dir,
-          target_length = 3.0,
-          original_path = files$name[i]
+        # 3. Create a dummy 'run' (the whole file)
+        run_id <- i
+        all_runs[[i]] <- data.table(
+          run_id = run_id,
+          start_time = 0,
+          end_time = dur,
+          filepath = dest_path
         )
-
-        if (nrow(chunking_results$runs_table) > 0) {
-          chunking_results$runs_table[, run_id := run_id + global_run_offset]
-          chunking_results$updated_features_df[, run_id := run_id + global_run_offset]
-
-          # Update the global offset for the NEXT file in the loop
-          global_run_offset <- max(chunking_results$runs_table$run_id)
-
-          all_chunks[[i]] <- chunking_results$runs_table
-          all_feats[[i]] <- chunking_results$updated_features_df
-          all_files[[i]] <- chunking_results$runs_table$filepath
-        }
+        
+        # 4. Create dummy 'features' so the classification/history logic doesn't break
+        all_feats[[i]] <- data.table(
+          run_id = run_id,
+          file_id = tools::file_path_sans_ext(files$name[i]),
+          filepath = dest_path,
+          user_class = as.character(NA)
+        )
       }
-
-      combined_runs <- rbindlist(all_chunks, fill = TRUE)
-
-      # 7.1 Check if anything was actually found
-      if (is.null(combined_runs) || nrow(combined_runs) == 0) {
-        removeModal()
-        showModal(modalDialog(
-          title = "No Candidates Found",
-          "The model did not detect any vocalisations in these files based on the current threshold (0.25).",
-          footer = modalButton("Try again"),
-          easyClose = TRUE
-        ))
-        return() # Stop the rest of the function from running
-      }
-
-      # 7.2 Update reactive storage
-      data_storage$features <- rbindlist(all_feats, fill = TRUE)
-      # Combine everything into one master classification list
-      data_storage$runs_table <- combined_runs
-      data_storage$files_to_classify <- unlist(all_files)
-      data_storage$current_run <- 1
-
-      # CRITICAL: Write the master files ONCE after the loop
-      fwrite(data_storage$runs_table, file.path(temp_dir, "runs.csv"))
-      fwrite(data_storage$features, file.path(temp_dir, "features.csv"))
-
-      # Save state for resume
-      saveRDS(
-        list(runs = data_storage$runs_table, feats = data_storage$features),
-        file.path(temp_dir, "app_state.rds")
-      )
-
-      removeModal()
-      showNotification(paste0("Processing complete! Found ", nrow(combined_runs), " candidates."),
-        type = "message"
-      )
-
-      shinyjs::hide("loading_overlay")
-      shinyjs::hide(id = "pre_process_sidebar")
-      shinyjs::show(id = "post_process_sidebar")
-      shinyjs::hide(id = "main_placeholder")
-      shinyjs::show(id = "main_ui")
     })
+    
+    # Update Reactive Storage
+    data_storage$runs_table <- rbindlist(all_runs)
+    data_storage$features <- rbindlist(all_feats)
+    data_storage$files_to_classify <- data_storage$runs_table$filepath
+    data_storage$current_run <- 1
+    
+    # Save state for resume functionality
+    fwrite(data_storage$runs_table, file.path(temp_dir, "runs.csv"))
+    fwrite(data_storage$features, file.path(temp_dir, "features.csv"))
+    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
+            file.path(temp_dir, "app_state.rds"))
+    
+    # UI Transitions
+    shinyjs::hide("pre_process_sidebar")
+    shinyjs::show("post_process_sidebar")
+    shinyjs::hide("main_placeholder")
+    shinyjs::show("main_ui")
   })
   
   # Resume previous session
@@ -482,11 +320,11 @@ server <- function(input, output, session) {
   })
 
   observeEvent(list(input$btn_squawk, input$hotkey_1), { 
-    handle_classification(data_storage, "Squawk", temp_dir, here("Output"), save_copy = input$save_copy)
+    handle_classification(data_storage, "Play Pant", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_alarm, input$hotkey_2), { 
-    handle_classification(data_storage, "Alarm Call", temp_dir, here("Output"), save_copy = input$save_copy)
+    handle_classification(data_storage, "Pant", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_noise, input$hotkey_3), { 
@@ -638,7 +476,7 @@ server <- function(input, output, session) {
     # Sanitize filename and create timestamp
     safe_prefix <- gsub("[^[:alnum:]]", "_", user_prefix)
     timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
-    zip_filename <- paste0(safe_prefix, "_SquawkSpot_", timestamp, ".zip")
+    zip_filename <- paste0(safe_prefix, "_WoofWatch_", timestamp, ".zip")
     
     withProgress(message = 'Creating Archive...', value = 0.5, {
       tryCatch({

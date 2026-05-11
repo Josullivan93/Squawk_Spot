@@ -11,8 +11,6 @@ p_load(
   dplyr, tidyr, lubridate, data.table, here, zoo, matrixStats,
   # Audio / Signal Processing
   tuneR, seewave, signal,
-  # Modeling & Performance
-  ranger, future, future.apply, reticulate,
   # Utilities
   zip
 )

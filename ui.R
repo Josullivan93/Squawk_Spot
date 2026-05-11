@@ -7,7 +7,7 @@ ui <- fluidPage(
       style = "position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
                background: white; z-index: 10000; display: flex; 
                flex-direction: column; justify-content: center; align-items: center;",
-      h2(tags$s("Squawk Spot"), " Woof Watch", style="color: #007bff; font-weight: bold;"),
+      h2("Woof Watch", style="color: #007bff; font-weight: bold;"),
       div(class = "circular-loader-container",
           div(class = "loader-circle",
               tags$img(src = "loader.gif")
@@ -57,7 +57,7 @@ ui <- fluidPage(
       }
     "))
   ),
-  titlePanel("SquawkSpot: Automated Vocalization Classifier"),
+  titlePanel("WoofWatch: Vocalization Annotator"),
   div(
     id = "loading_overlay",
     style = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -92,7 +92,7 @@ ui <- fluidPage(
         shinyjs::hidden(
           div(
             id = "post_process_sidebar",
-            h4("Step 2: Classify Detections"),
+            h4("Step 2: Annotate Vocalisations"),
 
             # Progress bar
             div(id = "progress_container", div(id = "progress_bar")),
@@ -100,8 +100,8 @@ ui <- fluidPage(
             hr(),
 
             # Classification Buttons
-            actionButton("btn_squawk", "1: Squawk", class = "btn-success btn-classify"),
-            actionButton("btn_alarm", "2: Alarm Call", class = "btn-info btn-classify"),
+            actionButton("btn_squawk", "1: Play Pant", class = "btn-success btn-classify"),
+            actionButton("btn_alarm", "2: Pant", class = "btn-info btn-classify"),
             actionButton("btn_other", "3: Other Vocalisation", class = "btn-warning btn-classify"),
             actionButton("btn_noise", "4: Noise / Background", class = "btn-danger btn-classify"),
             actionButton("btn_unknown", "5: Unknown / Unsure", class = "btn-secondary btn-classify"),
@@ -117,7 +117,6 @@ ui <- fluidPage(
             h4("Plotting Options"),
 
             # Toggle highlight off
-            checkboxInput("show_highlight", "Show/Hide Squawk Highlight", value = TRUE),
             checkboxInput("save_copy", "Also save copy to 'Annotated' folder", value = FALSE),
             br(),
             hr(),
@@ -132,7 +131,7 @@ ui <- fluidPage(
           id = "main_placeholder",
           wellPanel(
             h3("Welcome"),
-            p("Upload a field recording on the left. The system will automatically use the trained models to find candidate vocalizations for your review.")
+            p("Upload audio files on the left to begin manual annotation. You can review the waveform and spectrogram and assign a category to the entire file.")
           )
         ),
 
