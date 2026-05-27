@@ -7,7 +7,7 @@ ui <- fluidPage(
       style = "position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
                background: white; z-index: 10000; display: flex; 
                flex-direction: column; justify-content: center; align-items: center;",
-      h2("Woof Watch", style="color: #007bff; font-weight: bold;"),
+      h2("Call Correction", style="color: #007bff; font-weight: bold;"),
       div(class = "circular-loader-container",
           div(class = "loader-circle",
               tags$img(src = "loader.gif")
@@ -57,7 +57,7 @@ ui <- fluidPage(
       }
     "))
   ),
-  titlePanel("WoofWatch: Vocalization Annotator"),
+  titlePanel("Call Correction"),
   div(
     id = "loading_overlay",
     style = "display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -100,8 +100,8 @@ ui <- fluidPage(
             hr(),
 
             # Classification Buttons
-            actionButton("btn_squawk", "1: Play Pant", class = "btn-success btn-classify"),
-            actionButton("btn_alarm", "2: Pant", class = "btn-info btn-classify"),
+            actionButton("btn_squawk", "1: Squawk", class = "btn-success btn-classify"),
+            actionButton("btn_alarm", "2: Alarm", class = "btn-info btn-classify"),
             actionButton("btn_other", "3: Other Vocalisation", class = "btn-warning btn-classify"),
             actionButton("btn_noise", "4: Noise / Background", class = "btn-danger btn-classify"),
             actionButton("btn_unknown", "5: Unknown / Unsure", class = "btn-secondary btn-classify"),

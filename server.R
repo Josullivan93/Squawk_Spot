@@ -317,11 +317,11 @@ server <- function(input, output, session) {
   })
 
   observeEvent(list(input$btn_squawk, input$hotkey_1), { 
-    handle_classification(data_storage, "Play Pant", temp_dir, here("Output"), save_copy = input$save_copy)
+    handle_classification(data_storage, "Squawk", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_alarm, input$hotkey_2), { 
-    handle_classification(data_storage, "Pant", temp_dir, here("Output"), save_copy = input$save_copy)
+    handle_classification(data_storage, "Alarm", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
   observeEvent(list(input$btn_noise, input$hotkey_4), { 
