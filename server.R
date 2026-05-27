@@ -489,15 +489,15 @@ server <- function(input, output, session) {
     handle_classification(data_storage, "Alarm Call", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
-  observeEvent(list(input$btn_noise, input$hotkey_3), { 
+  observeEvent(list(input$btn_noise, input$hotkey_4), { 
     handle_classification(data_storage, "Noise", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
-  observeEvent(list(input$btn_unknown, input$hotkey_4), { 
+  observeEvent(list(input$btn_unknown, input$hotkey_5), { 
     handle_classification(data_storage, "Unknown", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
-  observeEvent(list(input$btn_other, input$hotkey_5), { 
+  observeEvent(list(input$btn_other, input$hotkey_3), { 
     handle_classification(data_storage, "Other Vocalisation", temp_dir, here("Output"), save_copy = input$save_copy)
     check_completion(data_storage, temp_dir, here("Output"))
   })
