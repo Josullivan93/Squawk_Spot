@@ -120,9 +120,9 @@ ui <- fluidPage(
             checkboxInput("show_highlight", "Show/Hide Squawk Highlight", value = TRUE),
             checkboxInput("save_copy", "Also save copy to 'Annotated' folder", value = FALSE),
             br(),
-            hr(),
-            h4("System Audit"),
-            verbatimTextOutput("debug_state")
+            hr()#,
+            # h4("System Audit"),
+            # verbatimTextOutput("debug_state")
           )
         )
       ),
