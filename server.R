@@ -1,26 +1,61 @@
 # server.R: Contains the core logic of the Shiny application.
-options(shiny.maxRequestSize = 30 * 1024^2)
+# Define the WebR fetch function at the top of the script
+submit_score_to_google <- function(score, total) {
+  # Validate inputs
+  if (is.null(score) || is.null(total) || is.na(score) || is.na(total)) {
+    warning("submit_score_to_google called with invalid inputs: score=", score, ", total=", total)
+    return(invisible(NULL))
+  }
+  
+  cat("Submitting to Google Sheets: score=", score, ", total=", total, "\n")
+  
+  google_url <- "https://script.google.com/macros/s/AKfycbwolI-f7jUWTbhO0CKdJ2c98CkvQbhf07SYQKQ68aDcpHXa_JKZjfPp1BKaWtFVqFm4/exec" 
+  
+  payload <- jsonlite::toJSON(list(score = score, total = total), auto_unbox = TRUE)
+  
+  cat("Payload:", payload, "\n")
+  
+  js_code <- sprintf("
+    fetch('%s', {
+      method: 'POST',
+      mode: 'cors',
+      headers: { 'Content-Type': 'text/plain' },
+      body: '%s'
+    })
+    .then(response => response.json())
+    .then(data => {
+      Shiny.setInputValue('google_response', data, {priority: 'event'});
+    });
+  ", google_url, payload)
+  
+  shinyjs::runjs(js_code)
+}
 
 # Server Definition
 server <- function(input, output, session) {
   
-  observe({
-    withProgress(message = 'System Startup', value = 0, {
-      
-      # Step 1: Load R Libraries
-      incProgress(0.4, detail = "Loading Bioacoustic Toolkits...")
-      
-      # Step 3: Finalize
-      incProgress(0.2, detail = "Opening Workspace...")
-      Sys.sleep(0.5) # Brief pause so the user can see it's finished
-      
-      # HIDE loading screen, SHOW app
-      shinyjs::hide("loading_page")
-      shinyjs::show("app_workspace")
-      
-      showNotification("Engine Ready", type = "message", duration = 3)
-    })
-  },  priority = 10)
+  startup_done <- FALSE
+  submission_done <- FALSE
+  
+  observeEvent(TRUE, {
+    # This runs ONCE when the server initializes
+    if (!startup_done) {
+      withProgress(message = 'System Startup', value = 0, {
+        incProgress(0.4, detail = "Loading Bioacoustic Toolkits...")
+        incProgress(0.2, detail = "Opening Workspace...")
+        Sys.sleep(0.5)
+        
+        # Ensure clean state: only pre_process_sidebar is visible
+        shinyjs::hide("loading_overlay")
+        shinyjs::hide("main_ui")
+        shinyjs::hide("completion_ui")
+        shinyjs::show("pre_process_sidebar")
+        
+        showNotification("Engine Ready", type = "message", duration = 3)
+      })
+      startup_done <<- TRUE
+    }
+  }, once = TRUE)
   
   observe({
     # Disable 'Previous' if we are at the very first run
@@ -47,38 +82,23 @@ server <- function(input, output, session) {
     showNotification("Audio reviewed. Buttons enabled.", type = "message", duration = 2)
   })
   
-  # reactiveValues object for storing data
+  # REACTIVE DATA STORAGE
   data_storage <- reactiveValues(
     features = NULL,
-    current_run = 1,
+    current_run = 0, # SET TO 0 initially so reactives don't fire yet
     files_to_classify = NULL,
-    full_wave_object = NULL,
-    runs_table = NULL,
-    history = list()
+    ground_truth = NULL,
+    user_answers = character(),
+    final_score = 0
   )
 
   # Reactive value for the playhead time
   playhead_time <- reactiveVal(0)
 
-  # Reactive to store current start/end time of run
-  current_run_times <- reactive({
-    req(data_storage$runs_table, data_storage$current_run)
-
-    run_idx <- data_storage$current_run
-
-    if (run_idx > nrow(data_storage$runs_table)) {
-      return(NULL)
-    }
-
-    list(
-      start = data_storage$runs_table$start_time[run_idx],
-      end   = data_storage$runs_table$end_time[run_idx]
-    )
-  })
-
   # Combined Reactive: chunk info + audio data
   current_chunk_full <- reactive({
-    req(data_storage$files_to_classify, data_storage$current_run)
+    req(data_storage$current_run > 0)
+    req(data_storage$files_to_classify)
     run_idx <- data_storage$current_run
 
     # Ensure index is valid before proceeding
@@ -124,14 +144,21 @@ server <- function(input, output, session) {
     spec_data$time <- spec_data$time[time_idx]
     spec_data$amp <- spec_data$amp[,time_idx]
 
-    times <- current_run_times()
-
     rm(chunk_wave)
+    
+    # Extract the highlight times for this specific file
+    current_file <- basename(chunk_path)
+    file_truth <- data_storage$ground_truth[data_storage$ground_truth$filename == current_file, ]
+    
+    chunk_highlight <- list(
+      start = file_truth$highlight_start,
+      end = file_truth$highlight_end
+    )
     
     list(
       chunk_path  = chunk_path,
       chunk_start = 0,
-      highlight   = NULL,
+      highlight   = chunk_highlight,
       duration    = duration,
       osc_data    = osc_data,
       time_vector = time_vector,
@@ -170,333 +197,318 @@ server <- function(input, output, session) {
         yaxis = list(range = c(0, 13), title = "Frequency (kHz)")
       )
   })
+  
+  # Demo plots
+  output$demo_squawk_spec <- renderPlotly({
+    # Load the demo squawk file
+    demo_wave <- readWave(here("www/demo/squawk_demo.wav"))
+    
+    # Generate spectrogram data
+    spec_data <- seewave::spectro(demo_wave@left,
+                                  f = demo_wave@samp.rate,
+                                  plot = FALSE, osc = FALSE
+    )
+    
+    # Trim frequency to 15 kHz (matching your main app)
+    max_khz_to_keep <- 15
+    freq_idx <- which(spec_data$freq <= max_khz_to_keep)
+    spec_data$freq <- spec_data$freq[freq_idx]
+    spec_data$amp <- spec_data$amp[freq_idx, ]
+    
+    # Downsample time bins for performance
+    target_time_bins <- 1000
+    step_t <- max(1, floor(length(spec_data$time) / target_time_bins))
+    time_idx <- seq(1, length(spec_data$time), by = step_t)
+    spec_data$time <- spec_data$time[time_idx]
+    spec_data$amp <- spec_data$amp[, time_idx]
+    
+    # Handle non-finite values
+    amp_db <- spec_data$amp
+    finite_vals <- amp_db[is.finite(amp_db)]
+    min_db <- if (length(finite_vals) > 0) min(finite_vals, na.rm = TRUE) else -100
+    amp_db[!is.finite(amp_db)] <- min_db
+    
+    # Create plotly heatmap (identical to main app)
+    plot_ly(z = amp_db, x = spec_data$time, y = spec_data$freq, 
+            type = "heatmap", colors = "inferno", 
+            showscale = FALSE, hoverinfo = "x+y+z", height = 300) |>
+      layout(
+        title = "Squawk Example Spectrogram",
+        xaxis = list(title = "Time (s)"),
+        yaxis = list(title = "Frequency (kHz)", range = c(0, 13)),
+        margin = list(l = 50, r = 50, t = 50, b = 50)
+      )
+  })
+  
+  output$demo_alarm_spec <- renderPlotly({
+    # Load the demo alarm file
+    demo_wave <- readWave(here("www/demo/alarm_demo.wav"))
+    
+    # Generate spectrogram data
+    spec_data <- seewave::spectro(demo_wave@left,
+                                  f = demo_wave@samp.rate,
+                                  plot = FALSE, osc = FALSE
+    )
+    
+    # Trim frequency to 15 kHz
+    max_khz_to_keep <- 15
+    freq_idx <- which(spec_data$freq <= max_khz_to_keep)
+    spec_data$freq <- spec_data$freq[freq_idx]
+    spec_data$amp <- spec_data$amp[freq_idx, ]
+    
+    # Downsample time bins
+    target_time_bins <- 1000
+    step_t <- max(1, floor(length(spec_data$time) / target_time_bins))
+    time_idx <- seq(1, length(spec_data$time), by = step_t)
+    spec_data$time <- spec_data$time[time_idx]
+    spec_data$amp <- spec_data$amp[, time_idx]
+    
+    # Handle non-finite values
+    amp_db <- spec_data$amp
+    finite_vals <- amp_db[is.finite(amp_db)]
+    min_db <- if (length(finite_vals) > 0) min(finite_vals, na.rm = TRUE) else -100
+    amp_db[!is.finite(amp_db)] <- min_db
+    
+    # Create plotly heatmap
+    plot_ly(z = amp_db, x = spec_data$time, y = spec_data$freq, 
+            type = "heatmap", colors = "inferno", 
+            showscale = FALSE, hoverinfo = "x+y+z", height = 300) |>
+      layout(
+        title = "Alarm Example Spectrogram",
+        xaxis = list(title = "Time (s)"),
+        yaxis = list(title = "Frequency (kHz)", range = c(0, 13)),
+        margin = list(l = 50, r = 50, t = 50, b = 50)
+      )
+  })
 
   # Update only playhead (fast)
   observeEvent(playhead_time(), {
-    req(current_chunk_full()) # Ensure chunk data exists before updating
+    req(current_chunk_full()) 
     chunk <- current_chunk_full()
-
+    
     shapes <- list()
-
+    
+    # 1. Conditionally add the Highlight Box
+    if (input$show_highlight && !is.null(chunk$highlight$start) && !is.na(chunk$highlight$start)) {
+      shapes[[1]] <- list(
+        type = "rect",
+        fillcolor = "rgba(0, 123, 255, 0.2)", # Semi-transparent blue
+        line = list(color = "rgba(0, 123, 255, 0.6)", width = 1),
+        x0 = chunk$highlight$start,
+        x1 = chunk$highlight$end,
+        y0 = 0, y1 = 1, yref = "paper"
+      )
+    }
+    
+    # 2. Always add the Playhead Line
     ph <- max(0, min(chunk$duration, as.numeric(playhead_time())))
     shapes[[length(shapes) + 1]] <- list(
       type = "line", x0 = ph, x1 = ph, y0 = 0, y1 = 1, yref = "paper",
       line = list(color = "red", width = 2)
     )
-
+    
+    # 3. Push both to the UI
     plotlyProxy("waveform_plot", session) |> plotlyProxyInvoke("relayout", list(shapes = shapes))
     plotlyProxy("spectrogram_plot", session) |> plotlyProxyInvoke("relayout", list(shapes = shapes))
   })
 
   # Update progress bar
   observeEvent(data_storage$current_run, {
-    req(data_storage$files_to_classify)
+    if (data_storage$current_run <= 1) {
+      shinyjs::disable("btn_prev")
+    } else {
+      shinyjs::enable("btn_prev")
+    }
     
+    # Your existing progress bar logic can safely live inside this same block
     total <- length(data_storage$files_to_classify)
     if (total > 0) {
       progress <- ((data_storage$current_run - 1) / total) * 100
-  
-      # Use shinyjs to update the style of the progress bar
-      shinyjs::runjs(paste0(
-        "document.getElementById('progress_bar').style.width = '", progress, "%';"
-      ))
+      shinyjs::runjs(paste0("document.getElementById('progress_bar').style.width = '", progress, "%';"))
     }
-  })
-
-  # UI Update Logic
-  observeEvent(input$upload_file, {
-    shinyjs::hide("main_ui")
-    temp_dir <- here("Output", "tmp")
-    if (!dir.exists(temp_dir)) dir.create(temp_dir, recursive = TRUE)
   })
 
   # File Processing and Chunking
-  observeEvent(input$process_btn, {
-    req(input$upload_file)
-
+  observeEvent(input$start_btn, {
     shinyjs::show("loading_overlay")
-    on.exit(shinyjs::hide("loading_overlay"))
-
-    temp_dir <- here("Output", "tmp")
-    files <- input$upload_file
+    shinyjs::hide("pre_process_sidebar")
     
-    all_runs <- list()
-    all_feats <- list()
+    # 1. Load ground truth and all audio files
+    master_truth <- read.csv("www/ground_truth.csv")
+    all_files <- list.files("www/audio", pattern = "\\.wav$", full.names = TRUE)
     
-    withProgress(message = "Preparing Files...", value = 0, {
-      for (i in seq_len(nrow(files))) {
-        incProgress(1 / nrow(files), detail = paste("Registering:", files$name[i]))
-        
-        # 1. Create unique name & Move file to tmp folder so it's ready for the audio player
-        unique_name <- paste0("idx", i, "_", files$name[i])
-        dest_path <- file.path(temp_dir, unique_name)
-        
-        file.copy(files$datapath[i], dest_path, overwrite = TRUE)
-        
-        # 2. Get duration for metadata
-        w <- readWave(dest_path, header = TRUE)
-        dur <- w$samples / w$sample.rate
-        
-        # 3. Create a dummy 'run' (the whole file)
-        run_id <- i
-        all_runs[[i]] <- data.table(
-          run_id = run_id,
-          start_time = 0,
-          end_time = dur,
-          filepath = dest_path
-        )
-        
-        # 4. Create dummy 'features' so the classification/history logic doesn't break
-        all_feats[[i]] <- data.table(
-          run_id = run_id,
-          file_id = tools::file_path_sans_ext(unique_name),
-          filepath = dest_path,
-          user_class = as.character(NA)
-        )
-      }
-    })
+    # 2. Randomly sample clips
+    quiz_files <- sample(all_files) 
+    quiz_filenames <- basename(quiz_files)
     
-    # Update Reactive Storage
-    data_storage$runs_table <- rbindlist(all_runs)
-    data_storage$features <- rbindlist(all_feats)
-    data_storage$files_to_classify <- data_storage$runs_table$filepath
+    # 3. Match the ground truth to the selected files
+    quiz_truth <- master_truth[match(quiz_filenames, master_truth$filename), ]
+    
+    # 4. Initialize session state
+    data_storage$files_to_classify <- quiz_files
+    data_storage$ground_truth <- quiz_truth
+    data_storage$user_answers <- character()
     data_storage$current_run <- 1
     
-    # Save state for resume functionality
-    fwrite(data_storage$runs_table, file.path(temp_dir, "runs.csv"))
-    fwrite(data_storage$features, file.path(temp_dir, "features.csv"))
-    saveRDS(list(runs = data_storage$runs_table, feats = data_storage$features), 
-            file.path(temp_dir, "app_state.rds"))
-    
-    # UI Transitions
-    shinyjs::hide("pre_process_sidebar")
-    shinyjs::show("post_process_sidebar")
-    shinyjs::hide("main_placeholder")
+    # 5. UI Transitions
     shinyjs::show("main_ui")
+    shinyjs::delay(500, shinyjs::hide("loading_overlay"))
   })
   
-  # Resume previous session
-  observeEvent(input$resume_btn, {
-    req(temp_dir)
-
-    addResourcePath("temp_audio", temp_dir)
-
-    feat_path <- file.path(temp_dir, "features.csv")
-    runs_path <- file.path(temp_dir, "runs.csv")
-    state_path <- file.path(temp_dir, "app_state.rds")
-
-    # Check if the session files actually exist
-    if (!file.exists(feat_path) || !file.exists(runs_path)) {
-      showNotification("No active session found to resume.", type = "error")
-      return()
-    }
-
-    if (file.exists(state_path)) {
-      state <- readRDS(state_path)
-      data_storage$features <- state$feats
-      data_storage$runs_table <- state$runs
-      data_storage$history <- state$history      # RESTORES metadata history
-      data_storage$current_run <- state$current   # RESTORES exact position
-    } else {
-      # Fallback: Load from CSVs and reset index if RDS is missing[cite: 1]
-      data_storage$features <- fread(feat_path)
-      data_storage$runs_table <- fread(runs_path)
-      data_storage$current_run <- 1 
+  submission_done <- FALSE
+  
+  advance_ui <- function() {
+    # Guard: ensure we have files to classify
+    if (is.null(data_storage$files_to_classify) || length(data_storage$files_to_classify) == 0) {
+      return(invisible(NULL))
     }
     
-    data_storage$files_to_classify <- data_storage$runs_table$filepath
-
-    # 4. Flip the UI switches
-    shinyjs::hide("pre_process_sidebar")
-    shinyjs::hide("main_placeholder")
-    shinyjs::show("post_process_sidebar")
-    shinyjs::show("main_ui")
-
-    removeModal()
-    showNotification(paste("Resumed session with", nrow(data_storage$runs_table), "remaining candidates."), type = "message")
-  })
-
+    total_files <- length(data_storage$files_to_classify)
+    current_run <- data_storage$current_run
+    
+    # Guard: ensure current_run is a valid number
+    if (is.null(current_run) || !is.numeric(current_run)) {
+      return(invisible(NULL))
+    }
+    
+    # Move to next file
+    data_storage$current_run <- current_run + 1
+    playhead_time(0)
+    
+    # Check if we've gone past the last file
+    if (data_storage$current_run > total_files) {
+      # Quiz is complete!
+      shinyjs::hide("main_ui")
+      shinyjs::show("completion_ui")
+      
+      # Calculate score (count matches between user answers and ground truth)
+      score <- sum(data_storage$user_answers == data_storage$ground_truth$true_class, na.rm = TRUE)
+      data_storage$final_score <- score
+      
+      # Debug: print to console to verify score calculation
+      cat("Quiz Complete!\n")
+      cat("Total files:", total_files, "\n")
+      cat("User answers:", paste(data_storage$user_answers, collapse = ", "), "\n")
+      cat("True class:", paste(data_storage$ground_truth$true_class, collapse = ", "), "\n")
+      cat("Score:", score, "\n")
+      
+      # Submit to Google Sheets
+      submit_score_to_google(score = score, total = total_files)
+    }
+  }
+  
   observeEvent(list(input$btn_squawk, input$hotkey_1), { 
-    handle_classification(data_storage, "Squawk", temp_dir, here("Output"), save_copy = input$save_copy)
-    check_completion(data_storage, temp_dir, here("Output"))
-  })
-  observeEvent(list(input$btn_alarm, input$hotkey_2), { 
-    handle_classification(data_storage, "Alarm", temp_dir, here("Output"), save_copy = input$save_copy)
-    check_completion(data_storage, temp_dir, here("Output"))
-  })
-  observeEvent(list(input$btn_noise, input$hotkey_4), { 
-    handle_classification(data_storage, "Noise", temp_dir, here("Output"), save_copy = input$save_copy)
-    check_completion(data_storage, temp_dir, here("Output"))
-  })
-  observeEvent(list(input$btn_unknown, input$hotkey_5), { 
-    handle_classification(data_storage, "Unknown", temp_dir, here("Output"), save_copy = input$save_copy)
-    check_completion(data_storage, temp_dir, here("Output"))
-  })
-  observeEvent(list(input$btn_other, input$hotkey_3), { 
-    handle_classification(data_storage, "Other Vocalisation", temp_dir, here("Output"), save_copy = input$save_copy)
-    check_completion(data_storage, temp_dir, here("Output"))
+    req(data_storage$current_run > 0)  # Don't fire until quiz has started
+    data_storage$user_answers[data_storage$current_run] <- "Squawk"
+    advance_ui()
   })
   
-  observeEvent(input$btn_next, { 
-    handle_classification(data_storage, "Skipped", temp_dir, here("Output"))
-    check_completion(data_storage, temp_dir, here("Output")) 
-    })
-
+  observeEvent(list(input$btn_alarm, input$hotkey_2), { 
+    req(data_storage$current_run > 0)
+    data_storage$user_answers[data_storage$current_run] <- "Alarm"
+    advance_ui()
+  })
+  
+  observeEvent(list(input$btn_other, input$hotkey_3), { 
+    req(data_storage$current_run > 0)
+    data_storage$user_answers[data_storage$current_run] <- "Other Vocalisation"
+    advance_ui()
+  })
+  
+  observeEvent(list(input$btn_noise, input$hotkey_4), { 
+    req(data_storage$current_run > 0)
+    data_storage$user_answers[data_storage$current_run] <- "Noise"
+    advance_ui()
+  })
+  
+  observeEvent(list(input$btn_unknown, input$hotkey_5), { 
+    req(data_storage$current_run > 0)
+    data_storage$user_answers[data_storage$current_run] <- "Unknown"
+    advance_ui()
+  })
+  
+  observeEvent(list(input$btn_skip), { 
+    req(data_storage$current_run > 0)
+    data_storage$user_answers[data_storage$current_run] <- "Skipped"
+    advance_ui()
+  })
   observeEvent(input$btn_prev, {
-    req(length(data_storage$history) > 0)
+    req(data_storage$current_run > 1) # Prevent going back before file 1
     
-    # 1. Pop the last action off the stack
-    last_action <- data_storage$history[[1]]
-    data_storage$history <- data_storage$history[-1]
-    
-    master_csv <- here("Output", "master_features.csv")
-    
-    # 2. Physically move the file back to the 'tmp' folder
-    if (file.exists(last_action$new_path)) {
-      success <- file.rename(last_action$new_path, last_action$old_path)
-      if(!success) {
-        showNotification("Undo failed: File is locked by another program.", type = "error")
-        return()
-      }
+    # Remove the last recorded answer
+    if (length(data_storage$user_answers) >= data_storage$current_run - 1) {
+      data_storage$user_answers <- data_storage$user_answers[-(data_storage$current_run - 1)]
     }
     
-    # Clean up the annotated copy if it exists
-    if (!is.null(last_action$annotated_path) && file.exists(last_action$annotated_path)) {
-      file.remove(last_action$annotated_path)
+    # Decrement the UI
+    data_storage$current_run <- data_storage$current_run - 1
+  })
+  
+  observeEvent(input$google_response, {
+    res <- input$google_response
+    
+    # Only proceed if we actually got a response (not NULL on startup)
+    if (is.null(res)) return()
+    
+    if (!is.null(res$success) && res$success) {
+      output$final_score_display <- renderUI({
+        tagList(
+          h2("Quiz Complete!"),
+          h3(paste("Your Score:", data_storage$final_score, "/ 10")),
+          hr(),
+          h4("Conference Statistics:"),
+          p(paste("Average Score:", res$average, "/ 10")),
+          p(paste("Total participants:", res$total_users))
+        )
+      })
+    } else {
+      output$final_score_display <- renderUI({
+        tagList(
+          h2("Quiz Complete!"),
+          h3(paste("Your Score:", data_storage$final_score, "/ 5")),
+          p("Offline mode: Could not retrieve crowd statistics.")
+        )
+      })
     }
-    
-    # 3. Clean up the Output CSVs (if it wasn't a skip)
-    if (last_action$label != "Skipped") {
-      # Remove from Master
-      master_csv <- here("Output", "master_features.csv")
-      if (file.exists(master_csv)) {
-        m_df <- fread(master_csv)
-        restored_features <- m_df[run_id == last_action$run_id]
-        m_df <- m_df[run_id != last_action$run_id] # Purge the bad run
-        fwrite(m_df, master_csv)
-      }
-      # Remove from Label Specific CSV
-      label_csv <- here("Output", gsub(" ", "_", last_action$label), paste0(gsub(" ", "_", last_action$label), ".csv"))
-      if (file.exists(label_csv)) {
-        l_df <- fread(label_csv)
-        l_df <- l_df[run_id != last_action$run_id]
-        fwrite(l_df, label_csv)
-      }
-    }
-    
-    # 4. Reconstruct the features (Undo the label and filepath overwrites)
-    if (last_action$label == "Skipped") {
-      skip_csv <- here("Output", "skipped_features.csv")
-      if (file.exists(skip_csv)) {
-        s_df <- fread(skip_csv)
-        restored_features <- s_df[run_id == last_action$run_id]
-        # Remove from skip log
-        fwrite(s_df[run_id != last_action$run_id], skip_csv)
-      }
-    }
-    
-    restored_features <- copy(restored_features)
-    restored_features[, user_class := NA] 
-    restored_features[, filepath := last_action$old_path]
-    
-    # 5. Restore data to memory and disk in 'tmp'
-    data_storage$features <- rbind(data_storage$features, restored_features, fill = TRUE)
-    
-    feat_path <- file.path(temp_dir, "features.csv")
-    if (file.exists(feat_path)) {
-      fwrite(rbind(fread(feat_path), restored_features, fill = TRUE), feat_path)
-    }
-    
-    # Restore the runs.csv row (We can grab this right from memory!)
-    runs_path <- file.path(temp_dir, "runs.csv")
-    run_row <- data_storage$runs_table[run_id == last_action$run_id]
-    if (file.exists(runs_path)) {
-      fwrite(rbind(fread(runs_path), run_row, fill = TRUE), runs_path)
-    }
-    
-    # 6. Decrement the UI
-    data_storage$current_run <- max(1, data_storage$current_run - 1)
-    
-    # Save State
-    saveRDS(
-      list(runs = data_storage$runs_table, 
-           feats = data_storage$features,
-           history = data_storage$history,
-           current = data_storage$current_run
-           ),
-      file.path(temp_dir, "app_state.rds")
-    )
-    
-    showNotification(paste("Undid classification for Run", last_action$run_id), type = "warning")
-    gc()
-    })
-
-  # Restart button
+  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  
+  # Handle the Try Again button
   observeEvent(input$restart_app, {
     shinyjs::hide("completion_ui")
-    shinyjs::hide("main_ui")
-    shinyjs::hide("post_process_sidebar")
     shinyjs::show("pre_process_sidebar")
-    shinyjs::show("main_placeholder")
-    shinyjs::show("app_workspace")
-    shinyjs::reset("upload_file")
-    # Reset data storage
-    data_storage$features <- NULL
-    data_storage$current_run <- 1
-    data_storage$files_to_classify <- NULL
-    data_storage$runs_table <- NULL
   })
   
-  # Zip and end button
-  observeEvent(input$btn_prep_zip, {
-    showModal(modalDialog(
-      title = "Finalize & Archive Session",
-      footer = tagList(
-        modalButton("Cancel"),
-        actionButton("btn_final_zip", "Confirm & Zip", class = "btn-success")
-      ),
-      p("Please enter your initials or an identifier. This will be added as a prefix to your output ZIP file."),
-      textInput("user_id", "Identifier:", placeholder = "e.g., JO"),
-      helpText("The app will close automatically after the ZIP is created.")
-    ))
-  })
-  
-  # 2. The actual zipping logic (triggered from inside the Modal)
-  observeEvent(input$btn_final_zip, {
-    req(input$user_id)
+  # Observe the highlight checkbox separately
+  observeEvent(input$show_highlight, {
+    req(current_chunk_full()) 
+    chunk <- current_chunk_full()
     
-    user_prefix <- trimws(input$user_id)
-    if (user_prefix == "") {
-      showNotification("Identifier cannot be empty.", type = "error")
-      return()
+    shapes <- list()
+    
+    # Add highlight box if enabled
+    if (input$show_highlight && !is.null(chunk$highlight$start) && !is.na(chunk$highlight$start)) {
+      shapes[[1]] <- list(
+        type = "rect",
+        fillcolor = "rgba(0, 123, 255, 0.2)",
+        line = list(color = "rgba(0, 123, 255, 0.6)", width = 1),
+        x0 = chunk$highlight$start,
+        x1 = chunk$highlight$end,
+        y0 = 0, y1 = 1, yref = "paper"
+      )
     }
     
-    # Remove the modal so it doesn't hang
-    removeModal()
+    # Add playhead line
+    ph <- max(0, min(chunk$duration, as.numeric(playhead_time())))
+    shapes[[length(shapes) + 1]] <- list(
+      type = "line", x0 = ph, x1 = ph, y0 = 0, y1 = 1, yref = "paper",
+      line = list(color = "red", width = 2)
+    )
     
-    # Sanitize filename and create timestamp
-    safe_prefix <- gsub("[^[:alnum:]]", "_", user_prefix)
-    timestamp <- format(Sys.time(), "%Y%m%d_%H%M")
-    zip_filename <- paste0(safe_prefix, "_WoofWatch_", timestamp, ".zip")
-    
-    withProgress(message = 'Creating Archive...', value = 0.5, {
-      tryCatch({
-        # Zip the Output folder
-        zip::zipr(zipfile = zip_filename, 
-                  files = here("Output"))
-        
-        showNotification(paste("Success! Created:", zip_filename), type = "message")
-        
-        # Wait and Close
-        Sys.sleep(2)
-        stopApp()
-        
-      }, error = function(e) {
-        showNotification(paste("Zipping failed:", e$message), type = "error")
-      })
-    })
+    # Update both plots
+    plotlyProxy("waveform_plot", session) |> plotlyProxyInvoke("relayout", list(shapes = shapes))
+    plotlyProxy("spectrogram_plot", session) |> plotlyProxyInvoke("relayout", list(shapes = shapes))
   })
-
+  
   # Audio Player UI
   output$audio_player <- renderUI({
     req(current_chunk_full())
@@ -504,7 +516,7 @@ server <- function(input, output, session) {
 
     audio_tag <- tags$audio(
       id = "audio_element",
-      src = file.path("temp_audio", basename(chunk$chunk_path)),
+      src = paste0("audio/", basename(chunk$chunk_path)),
       type = "audio/wav",
       autoplay = TRUE,
       controls = TRUE
@@ -533,16 +545,6 @@ server <- function(input, output, session) {
     playhead_time(input$current_time)
   })
 
-  output$debug_state <- renderPrint({
-    list(
-      current_run_idx = data_storage$current_run,
-      total_runs_in_table = if (!is.null(data_storage$runs_table)) nrow(data_storage$runs_table) else 0,
-      files_to_classify_count = length(data_storage$files_to_classify),
-      active_temp_files = list.files(temp_dir)
-    )
-  })
-
-
   # File info + progress
   output$file_info <- renderText({
     req(data_storage$files_to_classify, data_storage$current_run)
@@ -550,21 +552,7 @@ server <- function(input, output, session) {
     current_run_idx <- data_storage$current_run
     req(current_run_idx <= total_runs) # Ensure run index is valid
     current_file_name <- basename(here(data_storage$files_to_classify[current_run_idx]))
-    paste0("Run ", current_run_idx, " of ", total_runs, ": ", current_file_name)
-  })
-
-  # Check for existing session on app launch
-  isolate({
-    if (file.exists(file.path(temp_dir, "runs.csv")) && nrow(fread(file.path(temp_dir, "runs.csv"))) > 0) {
-      showModal(modalDialog(
-        title = "Interrupted Session Detected",
-        "It looks like the last session wasn't finished. Would you like to resume classifying the remaining clips?",
-        footer = tagList(
-          actionButton("resume_btn", "Yes, Resume", class = "btn-success"),
-          modalButton("No, Start Fresh")
-        )
-      ))
-    }
+    paste0("Run ", current_run_idx, " of ", total_runs)
   })
 
   session$onSessionEnded(function() {
