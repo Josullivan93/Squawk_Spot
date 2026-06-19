@@ -1,0 +1,16 @@
+# global.R
+library(shiny)
+library(shinyjs)
+library(plotly)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(data.table)
+library(here)
+library(zoo)
+library(matrixStats)
+library(tuneR)
+library(seewave)
+library(signal)
+
+source("www_config.r")
