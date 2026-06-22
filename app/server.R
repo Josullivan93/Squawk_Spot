@@ -7,28 +7,29 @@ submit_score_to_google <- function(score, total) {
   
   cat("Submitting to Google Sheets: score=", score, ", total=", total, "\n")
   
-  google_url <- "https://script.google.com/macros/s/AKfycbwolI-f7jUWTbhO0CKdJ2c98CkvQbhf07SYQKQ68aDcpHXa_JKZjfPp1BKaWtFVqFm4/exec" 
+  google_url <- "https://script.google.com/macros/s/AKfycbwBG9vzd71SUztARhXiNeOqNyW2e_-Timt3mu7KIYI6HjxcEaNGUi_ijU5if8pl5bZY/exec" 
   payload <- jsonlite::toJSON(list(score = score, total = total), auto_unbox = TRUE)
   
   js_code <- sprintf("
+    console.log('Starting submission with payload:', '%s');
+    
+    // Submit score with no-cors
     fetch('%s', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       mode: 'no-cors',
       body: '%s'
     })
-    .then(response => {
-  console.log('Score submitted successfully');
-  Shiny.setInputValue('google_response', 
-    {success: true, average: Math.round(Math.random() * 10), total_users: Math.floor(Math.random() * 100)}, 
-    {priority: 'event'}
-  );
-})
-.catch(error => {
-  console.error('Submission error:', error);
-  Shiny.setInputValue('google_response', {success: false}, {priority: 'event'});
-});
-  ", google_url, payload)
+    .then(() => {
+      console.log('Score submitted successfully');
+      // Wait a moment then signal success
+      Shiny.setInputValue('score_submitted', true, {priority: 'event'});
+    })
+    .catch(error => {
+      console.error('Submission error:', error);
+      Shiny.setInputValue('score_submitted', false, {priority: 'event'});
+    });
+  ", payload, google_url, payload)
   
   shinyjs::runjs(js_code)
 }
@@ -46,6 +47,8 @@ server <- function(input, output, session) {
       shinyjs::show("app_workspace") 
       shinyjs::hide("main_ui")
       shinyjs::hide("completion_ui")
+      shinyjs::hide("loading_overlay")
+      shinyjs::hide("score_overlay")
       shinyjs::show("pre_process_sidebar")
       
       # Finish the Asymptotic Progress Bar and fade out
@@ -82,7 +85,8 @@ server <- function(input, output, session) {
     files_to_classify = NULL,
     ground_truth = NULL,
     user_answers = character(),
-    final_score = 0
+    final_score = 0,
+    google_response = NULL
   )
   
   classification_btns <- c("btn_squawk", "btn_alarm", "btn_other", "btn_noise", "btn_unknown", "btn_skip")
@@ -120,7 +124,7 @@ server <- function(input, output, session) {
     
     # Try to read ground_truth.csv, if not found, create sample data
     master_truth <- tryCatch({
-      read.csv("ground_truth.csv")
+      read.csv("www/ground_truth.csv")
     }, error = function(e) {
       # Create sample ground truth data if file doesn't exist
       data.frame(
@@ -164,45 +168,106 @@ server <- function(input, output, session) {
   output$spec_img_ui <- renderUI({
     details <- current_file_details()
     img_url <- file.path(IMAGE_BASE_URL, paste0(details$base, "_spec.png"))
+    dur <- if (!is.null(input$current_audio_duration)) as.numeric(input$current_audio_duration) else 5.0
     
-    # Generate the CSS Highlight box if toggled
-    highlight_div <- NULL
-    if (isTRUE(input$show_highlight) && nrow(details$truth) > 0 && !is.na(details$truth$highlight_start)) {
-      # Grab duration from JS (or default to 5s if it hasn't loaded yet)
-      dur <- if (!is.null(input$current_audio_duration)) as.numeric(input$current_audio_duration) else 5.0
-      
-      left_pct <- (details$truth$highlight_start / dur) * 100
-      width_pct <- ((details$truth$highlight_end - details$truth$highlight_start) / dur) * 100
-      
-      highlight_div <- div(
-        style = sprintf("position: absolute; top: 0; left: %f%%; width: %f%%; height: 100%%; background-color: rgba(0, 123, 255, 0.2); border-left: 1px solid rgba(0, 123, 255, 0.6); border-right: 1px solid rgba(0, 123, 255, 0.6); z-index: 5; pointer-events: none;", left_pct, width_pct)
-      )
+    # Calculate highlight values
+    highlight_data <- NULL
+    if (isTRUE(input$show_highlight) && nrow(details$truth) > 0) {
+      hl_start <- details$truth$highlight_start[1]  # Get first row value
+      hl_end <- details$truth$highlight_end[1]
+      if (!is.na(hl_start) && !is.na(hl_end)) {
+        left_pct <- (hl_start / dur) * 100
+        width_pct <- ((hl_end - hl_start) / dur) * 100
+        highlight_data <- list(left = left_pct, width = width_pct)
+      }
     }
     
     tagList(
-      tags$img(src = img_url, class = "static-viz spec-img"),
-      highlight_div
+      # Y-axis label (left side)
+      tags$div(style = "display: flex; gap: 5px; align-items: stretch;",
+               tags$div(style = "width: 40px; display: flex; align-items: center; justify-content: center; font-size: 11px; text-align: center; color: #666; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap;",
+                        "Frequency (kHz)"
+               ),
+               tags$div(style = "flex: 1;",
+                        # Main visualization container with border as axis
+                        tags$div(style = "position: relative; width: 100%; display: inline-block; border-left: 1px solid #333; border-bottom: 1px solid #333;",
+                                 tags$img(src = img_url, class = "static-viz spec-img", style = "width: 100%; display: block;"),
+                                 
+                                 tags$svg(id = "spec-svg-overlay",
+                                          viewBox = "0 0 100 100",
+                                          preserveAspectRatio = "none",
+                                          style = "position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10;",
+                                          
+                                          if (!is.null(highlight_data)) {
+                                            tags$rect(x = highlight_data$left, y = 0, 
+                                                      width = highlight_data$width, height = 100,
+                                                      fill = "rgba(0, 123, 255, 0.2)")
+                                          },
+                                          
+                                          tags$line(id = "spec-playhead-line", x1 = 0, y1 = 0, x2 = 0, y2 = 100,
+                                                    stroke = "red", `stroke-width` = "0.3", opacity = "0.8")
+                                 )
+                        )
+               )
+      ),
+      
+      # X-axis label (bottom)
+      tags$div(style = "text-align: center; font-size: 11px; color: #666; margin-top: 2px;",
+               "Time (s)"
+      )
     )
   })
   
   output$wave_img_ui <- renderUI({
     details <- current_file_details()
     img_url <- file.path(IMAGE_BASE_URL, paste0(details$base, "_wave.png"))
+    dur <- if (!is.null(input$current_audio_duration)) as.numeric(input$current_audio_duration) else 5.0
     
-    highlight_div <- NULL
-    if (isTRUE(input$show_highlight) && nrow(details$truth) > 0 && !is.na(details$truth$highlight_start)) {
-      dur <- if (!is.null(input$current_audio_duration)) as.numeric(input$current_audio_duration) else 5.0
-      left_pct <- (details$truth$highlight_start / dur) * 100
-      width_pct <- ((details$truth$highlight_end - details$truth$highlight_start) / dur) * 100
-      
-      highlight_div <- div(
-        style = sprintf("position: absolute; top: 0; left: %f%%; width: %f%%; height: 100%%; background-color: rgba(0, 123, 255, 0.2); border-left: 1px solid rgba(0, 123, 255, 0.6); border-right: 1px solid rgba(0, 123, 255, 0.6); z-index: 5; pointer-events: none;", left_pct, width_pct)
-      )
+    # Calculate highlight values
+    highlight_data <- NULL
+    if (isTRUE(input$show_highlight) && nrow(details$truth) > 0) {
+      hl_start <- details$truth$highlight_start[1]  # Get first row value
+      hl_end <- details$truth$highlight_end[1]
+      if (!is.na(hl_start) && !is.na(hl_end)) {
+        left_pct <- (hl_start / dur) * 100
+        width_pct <- ((hl_end - hl_start) / dur) * 100
+        highlight_data <- list(left = left_pct, width = width_pct)
+      }
     }
     
     tagList(
-      tags$img(src = img_url, class = "static-viz wave-img"),
-      highlight_div
+      # Y-axis label (left side)
+      tags$div(style = "display: flex; gap: 5px; align-items: stretch;",
+               tags$div(style = "width: 40px; display: flex; align-items: center; justify-content: center; font-size: 11px; text-align: center; color: #666; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap;",
+                        "Amplitude"
+               ),
+               tags$div(style = "flex: 1;",
+                        # Main visualization container with border as axis
+                        tags$div(style = "position: relative; width: 100%; display: inline-block; border-left: 1px solid #333; border-bottom: 1px solid #333;",
+                                 tags$img(src = img_url, class = "static-viz wave-img", style = "width: 100%; display: block;"),
+                                 
+                                 tags$svg(id = "wave-svg-overlay",
+                                          viewBox = "0 0 100 100",
+                                          preserveAspectRatio = "none",
+                                          style = "position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10;",
+                                          
+                                          if (!is.null(highlight_data)) {
+                                            tags$rect(x = highlight_data$left, y = 0, 
+                                                      width = highlight_data$width, height = 100,
+                                                      fill = "rgba(0, 123, 255, 0.2)")
+                                          },
+                                          
+                                          tags$line(id = "wave-playhead-line", x1 = 0, y1 = 0, x2 = 0, y2 = 100,
+                                                    stroke = "red", `stroke-width` = "0.3", opacity = "0.8")
+                                 )
+                        )
+               )
+      ),
+      
+      # X-axis label (bottom)
+      tags$div(style = "text-align: center; font-size: 11px; color: #666; margin-top: 2px;",
+               "Time (s)"
+      )
     )
   })
   
@@ -221,31 +286,50 @@ server <- function(input, output, session) {
     )
     
     js_script <- tags$script(HTML("
-      var audio = document.getElementById('audio_element');
-      var spec_head = document.getElementById('spec_playhead');
-      var wave_head = document.getElementById('wave_playhead');
+    (function() {
+      // Clear any existing intervals for this session
+      if (window.__playheadIntervals) {
+        window.__playheadIntervals.forEach(id => clearInterval(id));
+      }
+      window.__playheadIntervals = [];
       
-      if (window.squawkTimer) clearInterval(window.squawkTimer);
-      
-      // Send duration to R so the highlight box scales perfectly
-      audio.addEventListener('loadedmetadata', function() {
-        Shiny.setInputValue('current_audio_duration', audio.duration);
-      });
-      
-      const updateLines = () => {
-        if (audio && audio.duration) {
-          let pct = (audio.currentTime / audio.duration) * 100;
-          if (spec_head) spec_head.style.left = pct + '%';
-          if (wave_head) wave_head.style.left = pct + '%';
+      setTimeout(function() {
+        var audio = document.getElementById('audio_element');
+        
+        if (audio) {
+          audio.addEventListener('loadedmetadata', function() {
+            Shiny.setInputValue('current_audio_duration', audio.duration);
+          });
+          
+          audio.addEventListener('ended', () => {
+            Shiny.setInputValue('audio_finished', Math.random(), {priority: 'event'});
+          });
         }
-      };
-      
-      window.squawkTimer = setInterval(updateLines, 50);
-      
-      audio.addEventListener('ended', () => {
-        Shiny.setInputValue('audio_finished', Math.random(), {priority: 'event'});
-      });
-    "))
+        
+        // Set up playhead interval
+        var playheadInterval = setInterval(() => {
+          var audio = document.getElementById('audio_element');
+          if (audio && audio.duration) {
+            var pct = (audio.currentTime / audio.duration) * 100;
+            
+            var specLine = document.getElementById('spec-playhead-line');
+            if (specLine) {
+              specLine.setAttribute('x1', pct);
+              specLine.setAttribute('x2', pct);
+            }
+            
+            var waveLine = document.getElementById('wave-playhead-line');
+            if (waveLine) {
+              waveLine.setAttribute('x1', pct);
+              waveLine.setAttribute('x2', pct);
+            }
+          }
+        }, 50);
+        
+        window.__playheadIntervals.push(playheadInterval);
+      }, 100);
+    })();
+  "))
     
     tagList(audio_tag, js_script)
   })
@@ -262,7 +346,7 @@ server <- function(input, output, session) {
     data_storage$current_run <- data_storage$current_run + 1
     
     if (data_storage$current_run > total_files) {
-      shinyjs::show("loading_overlay")
+      shinyjs::show("score_overlay")  # ← USE score_overlay HERE
       shinyjs::hide("main_ui")
       
       score <- sum(data_storage$user_answers == data_storage$ground_truth$true_class, na.rm = TRUE)
@@ -289,34 +373,131 @@ server <- function(input, output, session) {
   })
   
   # 7. Final Score & Google Response Handling
-  observeEvent(input$google_response, {
-    res <- input$google_response
-    if (is.null(res)) return()
-    
-    if (!is.null(res$success) && res$success) {
-      output$final_score_display <- renderUI({
-        tagList(
-          h2("Quiz Complete!"),
-          h3(paste("Your Score:", data_storage$final_score, "/", length(data_storage$files_to_classify))),
-          hr(),
-          h4("Conference Statistics:"),
-          p(paste("Average Score:", res$average, "/", length(data_storage$files_to_classify))),
-          p(paste("Total participants:", res$total_users))
-        )
-      })
-    } else {
-      output$final_score_display <- renderUI({
-        tagList(
-          h2("Quiz Complete!"),
-          h3(paste("Your Score:", data_storage$final_score, "/", length(data_storage$files_to_classify))),
-          p("Offline mode: Could not retrieve crowd statistics.")
-        )
+  observeEvent(input$score_submitted, {
+    if (input$score_submitted) {
+      cat("Score submitted, fetching stats from sheet...\n")
+      
+      tryCatch({
+        # Read the Scores sheet directly
+        scores_data <- read.csv("https://docs.google.com/spreadsheets/d/e/2PACX-1vSaY_bScsK72SRCZ8FfdxmM5CvK-gtHTl6SvaRvmmTSvmtz9kbnUK-MEdmuCgg5doQQ0RZYZuoPgNsK/pub?gid=0&single=true&output=csv")
+        
+        all_scores <- as.numeric(scores_data$UserScore)
+        all_scores <- all_scores[!is.na(all_scores)]
+        
+        avg_score <- mean(all_scores, na.rm = TRUE)
+        total_users <- length(all_scores)
+        
+        cat("Calculated average:", avg_score, "Total users:", total_users, "\n")
+        
+        total_files <- length(data_storage$files_to_classify)
+        your_score <- data_storage$final_score
+        
+        your_pct <- (your_score / total_files) * 100
+        avg_pct <- (avg_score / total_files) * 100
+        
+        # Create frequency table
+        tryCatch({
+          score_freq <- as.data.frame(table(all_scores))
+          colnames(score_freq) <- c("Score", "Frequency")
+          score_freq$Score <- as.numeric(as.character(score_freq$Score))
+          score_freq$Frequency <- as.numeric(score_freq$Frequency)
+          score_freq <- score_freq[order(score_freq$Score), ]
+          
+          cat("Frequency table created. Rows:", nrow(score_freq), "\n")
+          cat("Score values:", paste(score_freq$Score, collapse=", "), "\n")
+          cat("Frequency values:", paste(score_freq$Frequency, collapse=", "), "\n")
+          
+          # Pre-calculate bar heights
+          max_freq <- if(nrow(score_freq) > 0) max(score_freq$Frequency, na.rm=TRUE) else 1
+          bar_heights <- (score_freq$Frequency / max_freq) * 150
+          
+          cat("Max frequency:", max_freq, "\n")
+          cat("Bar heights:", paste(round(bar_heights), collapse=", "), "\n")
+          
+        }, error = function(e) {
+          cat("Error creating frequency table:", e$message, "\n")
+          stop(e)
+        })
+        
+        output$final_score_display <- renderUI({
+          tagList(
+            h3(paste("Your Score: ", your_score, " / ", total_files), 
+               style = "color: #007bff; margin: 10px 0;"),
+            
+            hr(),
+            
+            h4("Conference Statistics", style = "margin-top: 20px;"),
+            
+            fluidRow(
+              column(6,
+                     div(style = "text-align: center; padding: 10px; background: #f8f9fa; border-radius: 8px;",
+                         h5("Average Score", style = "color: #666; margin: 5px 0;"),
+                         h3(paste(round(data_storage$avg_score, 1), " / ", data_storage$total_files), 
+                            style = "color: #28a745; margin: 5px 0;"),
+                         p(paste("Total participants: ", data_storage$total_users), 
+                           style = "margin: 2px 0 0 0; font-size: 12px; color: #999;")
+                     )
+              ),
+              column(6,
+                     div(style = "text-align: center; padding: 10px; background: #f8f9fa; border-radius: 8px;",
+                         tags$div(style = "display: flex; gap: 20px; align-items: flex-end; justify-content: center; height: 100px; margin-bottom: 5px;",
+                                  tags$div(style = paste0("width: 40px; height: ", data_storage$your_pct, "%; background: linear-gradient(180deg, #007bff, #0056b3); border-radius: 4px 4px 0 0;"))
+                                  ,
+                                  tags$div(style = paste0("width: 40px; height: ", data_storage$avg_pct, "%; background: linear-gradient(180deg, #28a745, #20c997); border-radius: 4px 4px 0 0;"))
+                         ),
+                         tags$div(style = "display: flex; gap: 20px; justify-content: center; font-size: 11px; font-weight: bold;",
+                                  tags$div("You", style = "width: 40px; color: #007bff;"),
+                                  tags$div("Avg", style = "width: 40px; color: #28a745;")
+                         )
+                     )
+              )
+            ),
+            
+            hr(),
+            
+            h4("Score Distribution", style = "margin-top: 20px;"),
+            
+            if (nrow(score_freq) > 0) {
+              tags$div(style = "display: flex; gap: 15px; align-items: flex-end; justify-content: center; padding: 20px; background: #f8f9fa; border-radius: 8px; min-height: 200px;",
+                       lapply(1:nrow(score_freq), function(i) {
+                         score_val <- score_freq$Score[i]
+                         freq <- score_freq$Frequency[i]
+                         bar_height <- round(bar_heights[i])
+                         
+                         tags$div(style = "text-align: center; display: flex; flex-direction: column; align-items: center;",
+                                  tags$div(style = paste0("width: 40px; height: ", bar_height, "px; background: #6c757d; border-radius: 4px 4px 0 0;"))
+                                  ,
+                                  tags$div(paste(score_val), style = "font-size: 11px; font-weight: bold; margin-top: 8px;"),
+                                  tags$div(paste("n=", freq), style = "font-size: 10px; color: #999;")
+                         )
+                       })
+              )
+            } else {
+              tags$div(style = "color: #999; text-align: center;", "No distribution data")
+            }
+          )
+        })
+        
+        shinyjs::hide("score_overlay")
+        shinyjs::show("completion_ui")
+        
+      }, error = function(e) {
+        cat("Error reading sheet:", e$message, "\n")
+        
+        output$final_score_display <- renderUI({
+          total_files <- length(data_storage$files_to_classify)
+          tagList(
+            h2("Quiz Complete!"),
+            h3(paste("Your Score: ", data_storage$final_score, " / ", total_files)),
+            p("Error: Could not retrieve crowd statistics.")
+          )
+        })
+        
+        shinyjs::hide("score_overlay")
+        shinyjs::show("completion_ui")
       })
     }
-    
-    shinyjs::hide("loading_overlay")
-    shinyjs::show("completion_ui")
-  }, ignoreNULL = TRUE, ignoreInit = TRUE)
+  })
   
   observeEvent(input$restart_app, {
     shinyjs::hide("completion_ui")

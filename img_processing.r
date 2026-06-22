@@ -42,7 +42,7 @@ for (file in all_files) {
   }
   
   # ==========================================
-  # 1. WAVEFORM PLOT (Mimicking Plotly Scatter)
+  # 1. WAVEFORM PLOT (No axes, margins, or whitespace)
   # ==========================================
   duration <- length(wav@left) / wav@samp.rate
   time_vector <- seq(0, duration, length.out = length(wav@left))
@@ -54,28 +54,22 @@ for (file in all_files) {
   
   p_wave <- ggplot(wave_df, aes(x = Time, y = Amplitude)) +
     geom_line(color = "#1f77b4", linewidth = 0.15, alpha = 0.7) + 
-    # Force Y-axis labels to be exactly 5 characters wide (e.g., " -1.0", "  0.5")
-    scale_y_continuous(labels = function(x) sprintf("%5.1f", x)) +
     coord_cartesian(xlim = c(0, duration), ylim = y_range_wave, expand = FALSE) +
-    theme_minimal() +
-    labs(x = "Time (s)", y = "Amplitude") +
+    theme_void() +
     theme(
-      # Use a monospaced font for the Y-axis text to ensure identical pixel width
-      axis.text.y = element_text(family = "mono", size = 10),
-      axis.title.y = element_text(size = 11, margin = margin(r = 10)),
-      panel.grid.major = element_line(color = "#ebebeb"),
-      panel.grid.minor = element_blank(),
       panel.background = element_rect(fill = "white", color = NA),
-      plot.margin = margin(10, 15, 10, 10)
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.margin = margin(0, 0, 0, 0)
     )
   
-  # Lock resolution and dimensions
+  # Lock resolution: 1200px width = full audio duration
+  # Height can match your spec plot
   ggsave(file.path(output_dir, paste0(filename, "_wave.png")), 
-         plot = p_wave, width = 8, height = 3.5, dpi = 300)
+         plot = p_wave, width = 12, height = 3, dpi = 100, bg = "white")
   
   
   # ==========================================
-  # 2. SPECTROGRAM PLOT (Perfect Sync Version)
+  # 2. SPECTROGRAM PLOT (No axes, margins, or whitespace)
   # ==========================================
   spec <- spectro(wav, f = wav@samp.rate, wl = 512, ovlp = 75, plot = FALSE)
   amp_db <- spec$amp
@@ -93,23 +87,19 @@ for (file in all_files) {
   p_spec <- ggplot(spec_df, aes(x = Time, y = Frequency, fill = Amplitude)) +
     geom_raster(interpolate = TRUE) +
     scale_fill_viridis_c(option = "inferno") + 
-    # Force Y-axis labels to be exactly 5 characters wide (e.g., " 10.0", "  5.0")
-    scale_y_continuous(labels = function(x) sprintf("%5.1f", x)) +
     coord_cartesian(xlim = c(0, duration), ylim = c(0, 8), expand = FALSE) + 
-    theme_minimal() +
-    labs(x = "Time (s)", y = "Frequency") + # Trimmed to match the width of "Amplitude"
+    theme_void() +
     theme(
-      # Match the monospaced font and sizing perfectly to the waveform
-      axis.text.y = element_text(family = "mono", size = 10),
-      axis.title.y = element_text(size = 11, margin = margin(r = 10)),
-      legend.position = "none", 
-      panel.grid = element_blank(), 
-      plot.margin = margin(10, 15, 10, 10)
+      panel.background = element_rect(fill = "white", color = NA),
+      plot.background = element_rect(fill = "white", color = NA),
+      legend.position = "none",
+      plot.margin = margin(0, 0, 0, 0)
     )
   
   # Lock exact same resolution and dimensions as the waveform
+  # 1200px width = full audio duration, so playhead positioning is pixel-perfect
   ggsave(file.path(output_dir, paste0(filename, "_spec.png")), 
-         plot = p_spec, width = 8, height = 3.5, dpi = 300)
+         plot = p_spec, width = 12, height = 3, dpi = 100, bg = "white")
   
   cat("Processed:", filename, "\n")
 }
