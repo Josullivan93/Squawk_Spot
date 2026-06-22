@@ -118,11 +118,12 @@ server <- function(input, output, session) {
     shinyjs::show("loading_overlay")
     shinyjs::hide("pre_process_sidebar")
     
-    tryCatch({
-      master_truth <- read.csv("ground_truth.csv")
+    # Try to read ground_truth.csv, if not found, create sample data
+    master_truth <- tryCatch({
+      read.csv("ground_truth.csv")
     }, error = function(e) {
       # Create sample ground truth data if file doesn't exist
-      master_truth <<- data.frame(
+      data.frame(
         filename = ALL_AUDIO_FILES,
         true_class = c("Squawk", "Alarm", "Squawk", "Other Vocalisation", "Noise", 
                        "Squawk", "Alarm", "Unknown", "Noise", "Alarm"),
@@ -130,8 +131,11 @@ server <- function(input, output, session) {
         highlight_end = c(2.0, 2.5, 1.8, 2.2, 1.5, 2.1, 2.8, 1.9, 2.3, 3.0),
         stringsAsFactors = FALSE
       )
-      showNotification("Using sample ground truth data", type = "message", duration = 3)
     })
+    
+    if (!file.exists("ground_truth.csv")) {
+      showNotification("Using sample ground truth data", type = "message", duration = 3)
+    }
     
     quiz_filenames <- sample(ALL_AUDIO_FILES)
     quiz_files <- file.path(AUDIO_BASE_URL, paste0(quiz_filenames))
